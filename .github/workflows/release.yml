@@ -3,14 +3,20 @@ on: { push: { tags: ['v*'] } }
 permissions: { contents: write }
 jobs:
   build:
-    strategy: { matrix: { include: [{ os: windows-latest, args: "--target x86_64-pc-windows-msvc" }, { os: macos-14, args: "--target aarch64-apple-darwin" }] } }
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, args: "--target x86_64-pc-windows-msvc --bundles msi,nsis" }
+          - { os: macos-14, args: "--target aarch64-apple-darwin --bundles app,dmg" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - run: npm run generate-icons
       - run: npm run tauri build -- --features desktop ${{ matrix.args }}
       - uses: softprops/action-gh-release@v2
         with: { files: "src-tauri/target/**/release/bundle/**/*" }
