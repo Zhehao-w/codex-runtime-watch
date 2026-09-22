@@ -1,0 +1,36 @@
+[package]
+name = "codex-runtime-watch"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "codex_runtime_watch"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-runtime-watch"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:opener"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+notify = "8"
+opener = { version = "0.8", optional = true }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+thiserror = "2"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
