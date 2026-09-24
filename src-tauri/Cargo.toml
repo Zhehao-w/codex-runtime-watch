@@ -13,7 +13,7 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [features]
-desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:opener"]
+desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart", "dep:opener"]
 
 [dependencies]
 anyhow = "1"
@@ -22,10 +22,12 @@ dirs = "6"
 notify = "8"
 opener = { version = "0.8", optional = true }
 rusqlite = { version = "0.37", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
 thiserror = "2"
 walkdir = "2"
 

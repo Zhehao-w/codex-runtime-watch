@@ -7,7 +7,20 @@ use std::{
     path::Path,
 };
 pub fn scan_file(db: &Database, path: &Path, c: &mut Correlator) -> Result<usize> {
+    Ok(scan_file_observations(db, path, c)?.len())
+}
+pub fn scan_file_observations(
+    db: &Database,
+    path: &Path,
+    c: &mut Correlator,
+) -> Result<Vec<crate::Observation>> {
     let key = path.to_string_lossy();
+    let scope = format!(
+        "rollout:{:016x}",
+        key.bytes()
+            .fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b))
+                .wrapping_mul(0x100000001b3))
+    );
     let mut offset = db.offset(&key)?;
     let mut f = File::open(path)?;
     let len = f.metadata()?.len();
@@ -16,7 +29,7 @@ pub fn scan_file(db: &Database, path: &Path, c: &mut Correlator) -> Result<usize
     }
     f.seek(SeekFrom::Start(offset))?;
     let mut r = BufReader::new(f);
-    let mut count = 0;
+    let mut observations = Vec::new();
     loop {
         let start = offset;
         let mut line = String::new();
@@ -31,13 +44,17 @@ pub fn scan_file(db: &Database, path: &Path, c: &mut Correlator) -> Result<usize
         offset += n as u64;
         if let Ok(v) = serde_json::from_str(&line) {
             if let Some(e) = adapt(&v) {
-                if let Some(o) = c.push(e) {
+                if let Some(o) = c.push_scoped(&scope, e) {
+                    let existed =
+                        db.contains_turn(o.session_id.as_deref(), o.turn_id.as_deref(), &o.kind)?;
                     db.insert(&o)?;
-                    count += 1
+                    if !existed {
+                        observations.push(o)
+                    }
                 }
             }
         }
     }
     db.set_offset(&key, offset, None)?;
-    Ok(count)
+    Ok(observations)
 }

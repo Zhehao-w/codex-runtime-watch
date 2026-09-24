@@ -27,7 +27,7 @@ impl Observation {
             && self
                 .details
                 .as_deref()
-                .is_some_and(|d| d.contains("probe_error"))
+                .is_some_and(|d| d.contains("\"status\":\"failed\""))
         {
             return "Probe failed";
         }
@@ -39,11 +39,14 @@ impl Observation {
             };
         }
         match (&self.selected_model, &self.runtime_model) {
-            (Some(sm), Some(rm)) => match (sm == rm, self.selected_effort == self.runtime_effort) {
-                (true, true) => "Runtime match",
-                (false, true) => "Runtime model mismatch",
-                (true, false) => "Runtime effort mismatch",
-                (false, false) => "Runtime model + effort mismatch",
+            (Some(sm), Some(rm)) => match (
+                sm != rm,
+                matches!((&self.selected_effort, &self.runtime_effort), (Some(a), Some(b)) if a != b),
+            ) {
+                (false, false) => "Runtime match",
+                (true, false) => "Runtime model mismatch",
+                (false, true) => "Runtime effort mismatch",
+                (true, true) => "Runtime model + effort mismatch",
             },
             _ => {
                 if self.kind == "Probe" {

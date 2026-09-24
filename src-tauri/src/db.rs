@@ -18,6 +18,23 @@ impl Database {
         self.0.execute("INSERT INTO observations(time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,turn_id,type) WHERE turn_id IS NOT NULL DO UPDATE SET selected_model=COALESCE(excluded.selected_model,selected_model),selected_effort=COALESCE(excluded.selected_effort,selected_effort),runtime_model=COALESCE(excluded.runtime_model,runtime_model),runtime_effort=COALESCE(excluded.runtime_effort,runtime_effort),provider_model=COALESCE(excluded.provider_model,provider_model),evidence=excluded.evidence,details=excluded.details",params![o.time,o.kind,o.session_id,o.turn_id,o.selected_model,o.selected_effort,o.runtime_model,o.runtime_effort,o.provider_model,o.evidence,o.details])?;
         Ok(self.0.last_insert_rowid())
     }
+    pub fn contains_turn(
+        &self,
+        session: Option<&str>,
+        turn: Option<&str>,
+        kind: &str,
+    ) -> Result<bool> {
+        let Some(turn) = turn else { return Ok(false) };
+        Ok(self
+            .0
+            .query_row(
+                "SELECT 1 FROM observations WHERE session_id IS ? AND turn_id=? AND type=? LIMIT 1",
+                params![session, turn, kind],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
     pub fn offset(&self, p: &str) -> Result<u64> {
         Ok(self
             .0
@@ -31,8 +48,15 @@ impl Database {
         self.0.execute("INSERT INTO scan_state(source,offset,metadata) VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET offset=excluded.offset,metadata=excluded.metadata",params![p,n as i64,meta])?;
         Ok(())
     }
-    pub fn history(&self, limit: u32, offset: u32) -> Result<Vec<Observation>> {
-        let mut s=self.0.prepare("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations ORDER BY time DESC,id DESC LIMIT ? OFFSET ?")?;
+    pub fn history(&self, filter: &str, limit: u32, offset: u32) -> Result<Vec<Observation>> {
+        let predicate = match filter {
+            "runtime" => "type='Runtime'",
+            "probes" => "type='Probe'",
+            "mismatches" => "(provider_model IS NOT NULL AND (selected_model IS NULL OR provider_model != selected_model)) OR (provider_model IS NULL AND selected_model IS NOT NULL AND runtime_model IS NOT NULL AND (selected_model != runtime_model OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort)))",
+            _ => "1=1",
+        };
+        let sql = format!("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations WHERE {predicate} ORDER BY time DESC,id DESC LIMIT ? OFFSET ?");
+        let mut s = self.0.prepare(&sql)?;
         let rows = s
             .query_map(params![limit.min(500), offset], |r| {
                 Ok(Observation {
@@ -52,6 +76,9 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+    pub fn current_runtime(&self) -> Result<Option<Observation>> {
+        Ok(self.history("runtime", 1, 0)?.into_iter().next())
     }
     pub fn delete(&self, id: i64) -> Result<()> {
         self.0
