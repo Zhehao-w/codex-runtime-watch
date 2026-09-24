@@ -37,7 +37,14 @@ impl Database {
     }
     pub fn upsert_turn(&self, o: &Observation) -> Result<(ObservationChange, Observation)> {
         let before = self.turn(o.session_id.as_deref(), o.turn_id.as_deref(), &o.kind)?;
-        self.insert(o)?;
+        let merged;
+        let to_write = if let Some(existing) = before.as_ref() {
+            merged = merge_observations(existing, o);
+            &merged
+        } else {
+            o
+        };
+        self.insert(to_write)?;
         let Some(after) = self.turn(o.session_id.as_deref(), o.turn_id.as_deref(), &o.kind)? else {
             anyhow::bail!("turn upsert did not produce an observation")
         };
@@ -45,8 +52,9 @@ impl Database {
             None => ObservationChange::New,
             Some(before) if before == after => ObservationChange::Unchanged,
             Some(before) => ObservationChange::Updated {
-                notify: before.provider_model != after.provider_model
-                    && after.provider_model.is_some(),
+                notify: after.has_any_mismatch_or_reroute()
+                    && (!before.has_any_mismatch_or_reroute()
+                        || before.provider_model != after.provider_model),
             },
         };
         Ok((change, after))
@@ -79,7 +87,7 @@ impl Database {
         let predicate = match filter {
             "runtime" => "type='Runtime'",
             "probes" => "type='Probe'",
-            "mismatches" => "(provider_model IS NOT NULL AND (selected_model IS NULL OR provider_model != selected_model)) OR (provider_model IS NULL AND selected_model IS NOT NULL AND runtime_model IS NOT NULL AND (selected_model != runtime_model OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort)))",
+            "mismatches" => "type='Runtime' AND ((provider_model IS NOT NULL AND (selected_model IS NULL OR provider_model != selected_model)) OR (selected_model IS NOT NULL AND runtime_model IS NOT NULL AND selected_model != runtime_model) OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort))",
             _ => "1=1",
         };
         let sql = format!("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations WHERE {predicate} ORDER BY time DESC,id DESC LIMIT ? OFFSET ?");
@@ -115,5 +123,76 @@ impl Database {
     pub fn clear(&self) -> Result<()> {
         self.0.execute("DELETE FROM observations", [])?;
         Ok(())
+    }
+}
+
+fn merge_observations(existing: &Observation, incoming: &Observation) -> Observation {
+    let turn_context = incoming.evidence == "turn_context";
+    let mut details = existing
+        .details
+        .as_deref()
+        .and_then(|value| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value).ok()
+        })
+        .unwrap_or_default();
+    if let Some(incoming_details) = incoming.details.as_deref().and_then(|value| {
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value).ok()
+    }) {
+        for (key, value) in incoming_details {
+            if !value.is_null() {
+                details.insert(key, value);
+            }
+        }
+    }
+    let runtime_evidence = details.get("runtime_evidence").and_then(|v| v.as_str());
+    let provider_evidence = details.get("provider_evidence").and_then(|v| v.as_str());
+    let evidence = match (runtime_evidence, provider_evidence) {
+        (Some(runtime), Some(provider)) => format!("{runtime} + {provider}"),
+        (Some(runtime), None) => runtime.to_owned(),
+        (None, Some(provider)) => provider.to_owned(),
+        (None, None) => incoming.evidence.clone(),
+    };
+    Observation {
+        id: existing.id,
+        time: existing.time.clone(),
+        kind: existing.kind.clone(),
+        session_id: existing.session_id.clone(),
+        turn_id: existing.turn_id.clone(),
+        selected_model: if turn_context {
+            incoming
+                .selected_model
+                .clone()
+                .or_else(|| existing.selected_model.clone())
+        } else {
+            existing
+                .selected_model
+                .clone()
+                .or_else(|| incoming.selected_model.clone())
+        },
+        selected_effort: if turn_context {
+            incoming
+                .selected_effort
+                .clone()
+                .or_else(|| existing.selected_effort.clone())
+        } else {
+            existing
+                .selected_effort
+                .clone()
+                .or_else(|| incoming.selected_effort.clone())
+        },
+        runtime_model: incoming
+            .runtime_model
+            .clone()
+            .or_else(|| existing.runtime_model.clone()),
+        runtime_effort: incoming
+            .runtime_effort
+            .clone()
+            .or_else(|| existing.runtime_effort.clone()),
+        provider_model: incoming
+            .provider_model
+            .clone()
+            .or_else(|| existing.provider_model.clone()),
+        evidence,
+        details: (!details.is_empty()).then(|| serde_json::Value::Object(details).to_string()),
     }
 }

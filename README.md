@@ -3,7 +3,7 @@
 Codex Runtime Watch is a lightweight local desktop utility that records the model and reasoning
 effort Codex selects, runs, and—when explicitly exposed—reports from the provider. It watches normal
 Codex activity without generating extra requests and presents a compact current-turn view and
-searchable local history.
+filterable local history.
 
 > If provider identity is not exposed by Codex, the application reports **Not observed** instead of
 > guessing.
@@ -16,11 +16,13 @@ Version 0.1.0 supports **Windows 11 x64** and **macOS Apple Silicon**.
 |---|---|---|
 | **Selected** | The model/effort selected for this turn. | `turn_context.payload.collaboration_mode.settings` first; nested `thread_settings_applied.payload.thread_settings` is the thread fallback. |
 | **Runtime** | The local execution configuration recorded for a turn. | `turn_context.payload.model` and `turn_context.payload.effort` (including compatible field aliases). |
-| **Provider** | A model explicitly named by server/provider evidence. | Structured `model/rerouted` or server-model events only. |
+| **Provider** | A model explicitly named by server/provider evidence. | Structured provider fields that are actually present in a watched/persisted source, or Manual Verify. |
 
 Runtime is strong evidence about local execution configuration, but it does **not** prove which model
-a remote service ultimately served. The absence of a reroute event proves nothing about provider
-identity. Runtime is therefore never copied into Provider.
+a remote service ultimately served. The app does not subscribe to the Codex app-server notification
+protocol, where current `model/rerouted` notifications are exposed. It only adapts compatible records
+if they are actually persisted in a watched rollout. The absence of Provider evidence proves nothing
+about provider identity. Runtime is therefore never copied into Provider.
 
 Each rollout file is an isolated parsing scope. Its `session_meta.payload.id` supplies the canonical
 thread identity when available; otherwise a deterministic, non-path file identity plus the turn ID
@@ -31,22 +33,25 @@ future values Codex Runtime Watch has never seen.
 ## What works
 
 * Event-driven recursive watching under the Codex session directory, incremental JSONL reads, durable
-  byte cursors plus per-rollout identity/settings context, partial-line recovery, truncation recovery,
-  restart deduplication, and a bounded recent initial scan.
+  byte cursors plus per-rollout identity/settings context and a bounded-prefix fingerprint, partial-line
+  recovery, truncation/replacement recovery, restart deduplication, and a bounded recent initial scan.
 * Every useful normal turn is stored in SQLite, newest first, with All, Mismatches, Runtime, and
   Probes filters; records can be copied, deleted, or cleared.
 * A compact vanilla TypeScript UI with system/light/dark themes and factual mismatch results.
 * A Windows system tray/macOS menu-bar item that opens the app or Verify page, controls OS login
   startup, and quits explicitly. Closing the window hides it while monitoring continues.
 * Native notifications for each newly scanned runtime mismatch or explicit provider reroute when
-  enabled; probes remain in-app only.
+  enabled and OS permission is granted; permission is requested at startup or when notifications are
+  explicitly enabled, and denial never stops monitoring. Probes remain in-app only.
 * Manual **Verify Backend**, which sends exactly `hi` to the Codex Responses backend only after a
   click using the existing Codex login. It parses structured SSE `response.created.response.model`
   (or the explicit `OpenAI-Model` response header), records a separate Probe row, and classifies
   auth, network, capacity, and protocol failures without calling them mismatches.
 
-Codex currently does not guarantee provider-model metadata in ordinary local rollouts or CLI JSON
-output. Consequently, Provider will commonly remain **Not observed**. This is intended behavior.
+Codex currently exposes `model/rerouted` through its app-server notification protocol, which this
+application does not actively connect to or subscribe to. Normal Provider is populated only when
+explicit structured provider evidence is actually available in a watched/persisted source.
+Consequently, Provider will commonly remain **Not observed**. This is intended behavior.
 
 ## Privacy
 
@@ -97,7 +102,8 @@ identifier `dev.codexruntimewatch.app` and contains:
 
 The default startup window is seven days. Existing files outside that window are not imported;
 subsequent changes are event-driven. History is read in bounded pages and SQLite uses WAL with a
-short busy timeout.
+short busy timeout. Notification permission is controlled by Windows/macOS; denial is respected
+without repeated background prompts and does not affect recording.
 
 ## Troubleshooting
 
@@ -129,8 +135,9 @@ the normal response to upstream format changes.
 
 ## Known limitations
 
-* Provider evidence is only as available as Codex's persisted structured events; raw network traces
-  are neither required nor enabled.
+* Provider evidence is only as available as Codex's persisted structured events; live app-server
+  notifications and raw network traces are not subscribed or enabled. Manual Verify is the explicit
+  independent provider check.
 * Manual Verify depends on the current Codex web authentication/backend protocol. If explicit model
   evidence is absent, the probe is a protocol failure rather than guessed verification.
 * Signing and notarization are release-operator responsibilities.

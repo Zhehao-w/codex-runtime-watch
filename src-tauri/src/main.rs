@@ -12,12 +12,14 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 struct State {
     db: Mutex<Database>,
     settings_path: PathBuf,
     app_dir: PathBuf,
     watcher: Mutex<std::sync::mpsc::Sender<WatchCommand>>,
+    watcher_status: std::sync::Arc<Mutex<String>>,
+    login_menu: Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
 }
 enum WatchCommand {
     Configure(PathBuf, u32, bool),
@@ -27,7 +29,7 @@ enum WatchCommand {
 struct View {
     #[serde(flatten)]
     o: Observation,
-    result: &'static str,
+    result: String,
 }
 fn codex_home(s: &Settings) -> PathBuf {
     s.codex_home
@@ -71,6 +73,14 @@ fn current_runtime(state: tauri::State<State>) -> Result<Option<View>, String> {
     }))
 }
 #[tauri::command]
+fn watcher_status(state: tauri::State<State>) -> String {
+    state
+        .watcher_status
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_else(|_| "Watcher error".into())
+}
+#[tauri::command]
 fn get_settings(app: tauri::AppHandle, state: tauri::State<State>) -> Settings {
     let mut settings = Settings::load(&state.settings_path);
     if let Ok(enabled) = app.autolaunch().is_enabled() {
@@ -97,6 +107,20 @@ fn save_settings(
         autostart.disable()
     }
     .map_err(|e| e.to_string())?;
+    if let Ok(menu) = state.login_menu.lock() {
+        if let Some(menu) = menu.as_ref() {
+            let actual = autostart.is_enabled().unwrap_or(settings.start_at_login);
+            let _ = menu.set_checked(actual);
+        }
+    }
+    if settings.notify_mismatch
+        && matches!(
+            app.notification().permission_state(),
+            Ok(PermissionState::Prompt | PermissionState::PromptWithRationale)
+        )
+    {
+        let _ = app.notification().request_permission();
+    }
     state
         .watcher
         .lock()
@@ -164,7 +188,7 @@ fn open_folder(state: tauri::State<State>, kind: String) -> Result<(), String> {
     opener::open(p).map_err(|e| e.to_string())
 }
 fn rollout(path: &Path) -> bool {
-    path.extension().is_some_and(|x| x == "jsonl") && path.to_string_lossy().contains("sessions")
+    path.extension().is_some_and(|x| x == "jsonl")
 }
 fn scan_path(
     db: &Database,
@@ -182,9 +206,14 @@ fn scan_path(
         for change in observations.into_iter().filter(|change| {
             change.notify
                 && change.observation.kind == "Runtime"
-                && (change.observation.result().contains("mismatch")
-                    || change.observation.result().contains("reroute"))
+                && change.observation.has_any_mismatch_or_reroute()
         }) {
+            if !matches!(
+                handle.notification().permission_state(),
+                Ok(PermissionState::Granted)
+            ) {
+                continue;
+            }
             let _ = handle
                 .notification()
                 .builder()
@@ -205,6 +234,11 @@ fn show_main(app: &tauri::AppHandle, verify: bool) {
 }
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|arg| arg == "--hidden") {
+                show_main(app, false);
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -225,17 +259,29 @@ fn main() {
             let home = codex_home(&settings);
             let initial_scan_days = settings.initial_scan_days;
             let notify_mismatch = settings.notify_mismatch;
+            if notify_mismatch
+                && matches!(
+                    app.notification().permission_state(),
+                    Ok(PermissionState::Prompt | PermissionState::PromptWithRationale)
+                )
+            {
+                let _ = app.notification().request_permission();
+            }
             let db_path = app_dir.join("runtime-watch.sqlite");
             let tray_settings_path = settings_path.clone();
             let (command_tx, command_rx) = std::sync::mpsc::channel();
+            let watcher_status = std::sync::Arc::new(Mutex::new(String::from("Starting")));
             app.manage(State {
                 db: Mutex::new(Database::open(&db_path)?),
                 settings_path,
                 app_dir,
                 watcher: Mutex::new(command_tx.clone()),
+                watcher_status: watcher_status.clone(),
+                login_menu: Mutex::new(None),
             });
             let handle = app.handle().clone();
             let watcher_tx = command_tx.clone();
+            let thread_status = watcher_status.clone();
             std::thread::spawn(move || {
                 let db = match Database::open(&db_path) {
                     Ok(x) => x,
@@ -249,10 +295,15 @@ fn main() {
                         WatchCommand::Configure(home, days, notifications) => {
                             notify_enabled = notifications;
                             drop(watcher.take());
-                            if !home.exists() {
+                            let sessions = home.join("sessions");
+                            if !sessions.is_dir() {
+                                if let Ok(mut status) = thread_status.lock() {
+                                    *status = "Codex sessions folder not found".into();
+                                }
+                                let _ = handle.emit("runtime-watch-update", ());
                                 continue;
                             }
-                            for entry in walkdir::WalkDir::new(&home)
+                            for entry in walkdir::WalkDir::new(&sessions)
                                 .into_iter()
                                 .filter_map(Result::ok)
                                 .filter(|e| rollout(e.path()))
@@ -279,7 +330,18 @@ fn main() {
                             )
                             .ok();
                             if let Some(w) = watcher.as_mut() {
-                                let _ = w.watch(&home, RecursiveMode::Recursive);
+                                let status = if w.watch(&sessions, RecursiveMode::Recursive).is_ok()
+                                {
+                                    "Watching"
+                                } else {
+                                    "Watcher error"
+                                };
+                                if let Ok(mut current) = thread_status.lock() {
+                                    *current = status.into();
+                                }
+                                let _ = handle.emit("runtime-watch-update", ());
+                            } else if let Ok(mut status) = thread_status.lock() {
+                                *status = "Watcher error".into();
                             }
                         }
                         WatchCommand::Path(path) => {
@@ -309,6 +371,9 @@ fn main() {
                 settings.start_at_login,
                 None::<&str>,
             )?;
+            if let Ok(mut item) = app.state::<State>().login_menu.lock() {
+                *item = Some(login.clone());
+            }
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &verify, &login, &quit])?;
             let mut tray = TrayIconBuilder::with_id("main-tray")
@@ -326,6 +391,7 @@ fn main() {
                             manager.enable().map(|_| true)
                         };
                         if let Ok(enabled) = changed {
+                            let _ = login.set_checked(enabled);
                             let mut settings = Settings::load(&tray_settings_path);
                             settings.start_at_login = enabled;
                             let _ = settings.save(&tray_settings_path);
@@ -356,6 +422,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             history,
             current_runtime,
+            watcher_status,
             get_settings,
             save_settings,
             delete_observation,

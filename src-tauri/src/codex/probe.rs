@@ -2,9 +2,15 @@ use crate::Observation;
 use chrono::Utc;
 use reqwest::blocking::Client;
 use serde_json::Value;
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    io::{BufRead, BufReader, Read},
+    path::Path,
+    time::Duration,
+};
 
 const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+const MAX_SSE_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ProbeEvidence {
@@ -12,49 +18,84 @@ pub struct ProbeEvidence {
     pub response_id: Option<String>,
 }
 
-/// Parse only the typed SSE payload used by the Responses API. Conversation
-/// content is deliberately ignored and never returned to callers.
-pub fn parse_sse(input: &str) -> ProbeEvidence {
-    let mut out = ProbeEvidence::default();
-    for line in input.lines() {
-        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
-            continue;
-        };
-        if data == "[DONE]" {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(data) else {
-            continue;
-        };
-        if v.get("type").and_then(Value::as_str) != Some("response.created") {
-            continue;
-        }
-        let Some(response) = v.get("response") else {
-            continue;
-        };
-        out.model = response
-            .get("model")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                response
-                    .pointer("/headers/OpenAI-Model")
-                    .and_then(Value::as_str)
-            })
-            .or_else(|| {
-                response
-                    .pointer("/headers/openai-model")
-                    .and_then(Value::as_str)
-            })
-            .map(str::to_owned);
-        out.response_id = response
+pub fn normalize_request(model: &str, effort: &str) -> Result<(String, String), &'static str> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Model is required");
+    }
+    let effort = effort.trim();
+    Ok((
+        model.to_owned(),
+        if effort.is_empty() {
+            "low".into()
+        } else {
+            effort.to_owned()
+        },
+    ))
+}
+
+fn parse_data(data: &str) -> Option<ProbeEvidence> {
+    if data == "[DONE]" {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(data).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("response.created") {
+        return None;
+    }
+    let response = value.get("response")?;
+    let model = response
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Some(ProbeEvidence {
+        model,
+        response_id: response
             .get("id")
             .and_then(Value::as_str)
-            .map(str::to_owned);
-        if out.model.is_some() {
+            .map(str::to_owned),
+    })
+}
+
+/// Reads framed SSE incrementally and returns immediately after structured
+/// `response.created.response.model` evidence. All other response content is ignored.
+pub fn parse_sse_reader(reader: impl Read, maximum: u64) -> Result<ProbeEvidence, &'static str> {
+    let mut reader = BufReader::new(reader.take(maximum + 1));
+    let mut consumed = 0_u64;
+    let mut data = Vec::<String>::new();
+    loop {
+        let mut line = String::new();
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|_| "Unable to read probe stream")?;
+        if bytes == 0 {
             break;
         }
+        consumed += bytes as u64;
+        if consumed > maximum {
+            return Err("Probe response exceeded the safe streaming limit");
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            if !data.is_empty() {
+                if let Some(evidence) = parse_data(&data.join("\n")) {
+                    if evidence.model.is_some() {
+                        return Ok(evidence);
+                    }
+                }
+                data.clear();
+            }
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.trim_start().to_owned());
+        }
     }
-    out
+    if let Some(evidence) = parse_data(&data.join("\n")) {
+        return Ok(evidence);
+    }
+    Ok(ProbeEvidence::default())
+}
+
+pub fn parse_sse(input: &str) -> ProbeEvidence {
+    parse_sse_reader(input.as_bytes(), input.len() as u64).unwrap_or_default()
 }
 
 fn failed(model: String, effort: String, class: &str, message: impl ToString) -> Observation {
@@ -79,7 +120,7 @@ fn observation(
         session_id: None,
         turn_id: None,
         selected_model: Some(model),
-        selected_effort: (!effort.is_empty()).then_some(effort),
+        selected_effort: Some(effort),
         runtime_model: None,
         runtime_effort: None,
         provider_model: provider,
@@ -89,11 +130,22 @@ fn observation(
 }
 
 pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
+    let (model, effort) = match normalize_request(&model, &effort) {
+        Ok(values) => values,
+        Err(message) => {
+            return failed(
+                model.trim().to_owned(),
+                effort.trim().to_owned(),
+                "input",
+                message,
+            )
+        }
+    };
     let auth: Value = match fs::read(codex_home.join("auth.json"))
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     {
-        Some(v) => v,
+        Some(value) => value,
         None => {
             return failed(
                 model,
@@ -117,29 +169,30 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
         .user_agent("codex_cli_rs")
         .build()
     {
-        Ok(c) => c,
-        Err(e) => return failed(model, effort, "network", e),
+        Ok(client) => client,
+        Err(error) => return failed(model, effort, "network", error),
     };
     let mut request = client.post(RESPONSES_URL).bearer_auth(token).header("originator", "codex_cli_rs")
         .header("accept", "text/event-stream").json(&serde_json::json!({
             "model": model, "instructions": "You are a helpful assistant.",
             "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],
-            "stream": true, "store": false,
-            "reasoning": {"effort": if effort.is_empty() { "low" } else { effort.as_str() }}
+            "stream": true, "store": false, "reasoning": {"effort": effort}
         }));
     if let Some(id) = account {
         request = request.header("chatgpt-account-id", id);
     }
-    let response = match request.send() {
-        Ok(r) => r,
-        Err(e) if e.is_timeout() => return failed(model, effort, "network", "Probe timed out"),
-        Err(e) => return failed(model, effort, "network", e),
+    let mut response = match request.send() {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => {
+            return failed(model, effort, "network", "Probe timed out")
+        }
+        Err(error) => return failed(model, effort, "network", error),
     };
     let status = response.status();
     if !status.is_success() {
-        let class = if status.as_u16() == 401 || status.as_u16() == 403 {
+        let class = if matches!(status.as_u16(), 401 | 403) {
             "auth"
-        } else if status.as_u16() == 429 || status.as_u16() == 503 {
+        } else if matches!(status.as_u16(), 429 | 503) {
             "capacity"
         } else {
             "protocol"
@@ -154,18 +207,17 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
     let safety = response
         .headers()
         .get("x-codex-safety-buffering-enabled")
-        .and_then(|x| x.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let header_model = response
         .headers()
         .get("openai-model")
-        .and_then(|x| x.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let body = match response.text() {
-        Ok(x) => x,
-        Err(e) => return failed(model, effort, "protocol", e),
+    let parsed = match parse_sse_reader(&mut response, MAX_SSE_BYTES) {
+        Ok(parsed) => parsed,
+        Err(message) => return failed(model, effort, "protocol", message),
     };
-    let parsed = parse_sse(&body);
     let provider = parsed.model.or(header_model);
     let Some(provider) = provider else {
         return failed(

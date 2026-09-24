@@ -101,7 +101,6 @@ pub fn adapt(v: &Value) -> Option<Evidence> {
 pub struct Correlator {
     selected: HashMap<String, (Option<String>, Option<String>)>,
     sessions: HashMap<String, (String, Option<String>, bool)>,
-    pending: HashMap<String, Observation>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -139,52 +138,44 @@ impl Correlator {
             return None;
         }
         let turn = e.turn_id.clone()?;
-        let identity = format!("{key}:{turn}");
-        let o = self.pending.entry(identity.clone()).or_insert_with(|| {
-            let fallback = self
-                .selected
-                .get(&key)
-                .or_else(|| self.selected.get(scope))
-                .cloned()
-                .unwrap_or_default();
-            let selected_model = e.selected_model.clone().or(fallback.0);
-            let selected_effort = e.selected_effort.clone().or(fallback.1);
-            let session = e
-                .session_id
-                .clone()
-                .or_else(|| e.thread_id.clone())
-                .or_else(|| self.sessions.get(scope).map(|x| x.0.clone()))
-                .or_else(|| Some(scope.to_owned()));
-            Observation {
-                id: None,
-                time: e.time.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
-                kind: "Runtime".into(),
-                session_id: session,
-                turn_id: Some(turn),
-                selected_model,
-                selected_effort,
-                runtime_model: None,
-                runtime_effort: None,
-                provider_model: None,
-                evidence: e.source.clone(),
-                details: None,
-            }
+        let fallback = self
+            .selected
+            .get(&key)
+            .or_else(|| self.selected.get(scope))
+            .cloned()
+            .unwrap_or_default();
+        // Turn context is authoritative for per-turn Selected. Provider-only
+        // evidence carries the thread fallback until SQLite merges later facts.
+        let selected_model = e.selected_model.clone().or(fallback.0);
+        let selected_effort = e.selected_effort.clone().or(fallback.1);
+        let session = e
+            .session_id
+            .clone()
+            .or_else(|| e.thread_id.clone())
+            .or_else(|| self.sessions.get(scope).map(|x| x.0.clone()))
+            .or_else(|| Some(scope.to_owned()));
+        let is_runtime = e.runtime_model.is_some() || e.source == "turn_context";
+        let details = serde_json::json!({
+            "parent_thread": e.parent_thread.clone().or_else(|| self.sessions.get(scope).and_then(|x| x.1.clone())),
+            "subagent": e.is_subagent || self.sessions.get(scope).is_some_and(|x| x.2),
+            "runtime_evidence": is_runtime.then_some(e.source.clone()),
+            "provider_reason": e.provider_reason,
+            "provider_evidence": e.provider_model.as_ref().map(|_| e.source.clone()),
         });
-        if e.runtime_model.is_some() {
-            o.runtime_model = e.runtime_model;
-            o.runtime_effort = e.runtime_effort;
-            o.evidence = "turn_context".into();
-            o.details = Some(
-                serde_json::json!({"parent_thread":e.parent_thread.clone().or_else(|| self.sessions.get(scope).and_then(|x| x.1.clone())),"subagent":e.is_subagent || self.sessions.get(scope).is_some_and(|x| x.2)})
-                    .to_string(),
-            )
-        }
-        if e.provider_model.is_some() {
-            o.provider_model = e.provider_model;
-            o.evidence = e.source;
-            o.details = Some(serde_json::json!({"provider_reason":e.provider_reason}).to_string())
-        }
-        Some(o.clone())
+        Some(Observation {
+            id: None,
+            time: e.time.unwrap_or_else(|| Utc::now().to_rfc3339()),
+            kind: "Runtime".into(),
+            session_id: session,
+            turn_id: Some(turn),
+            selected_model,
+            selected_effort,
+            runtime_model: e.runtime_model,
+            runtime_effort: e.runtime_effort,
+            provider_model: e.provider_model,
+            evidence: e.source,
+            details: Some(details.to_string()),
+        })
     }
 
     pub fn restore_scope(&mut self, scope: &str, metadata: &str) {
@@ -212,8 +203,10 @@ impl Correlator {
             self.selected.remove(&session);
         }
         self.selected.remove(scope);
-        self.pending
-            .retain(|identity, _| !identity.starts_with(&format!("{scope}:")));
+    }
+
+    pub fn retained_entries(&self) -> usize {
+        self.selected.len() + self.sessions.len()
     }
 
     pub fn persist_scope(&self, scope: &str) -> String {

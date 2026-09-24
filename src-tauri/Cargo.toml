@@ -13,7 +13,7 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [features]
-desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart", "dep:opener"]
+desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart", "dep:tauri-plugin-single-instance", "dep:opener"]
 
 [dependencies]
 anyhow = "1"
@@ -28,6 +28,7 @@ serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-autostart = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 thiserror = "2"
 walkdir = "2"
 
