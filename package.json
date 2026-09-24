@@ -1,0 +1,9 @@
+{
+  "name": "codex-runtime-watch",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "generate-icons": "tauri icon src-tauri/icon-source.svg", "tauri": "tauri" },
+  "devDependencies": { "@tauri-apps/cli": "^2.8.4", "typescript": "^5.9.2", "vite": "^7.1.5" },
+  "dependencies": { "@tauri-apps/api": "^2.8.0" }
+}
