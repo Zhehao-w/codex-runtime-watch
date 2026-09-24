@@ -14,3 +14,6 @@ Use vanilla TypeScript for this small UI. Keep SQLite to factual records in the 
 do not persist redundant derived status. Run formatting, clippy, Rust tests, TypeScript typechecking,
 and the frontend build before committing. Supported release targets are Windows 11 x64 and macOS
 Apple Silicon only; macOS Intel and Linux packaging are not requirements.
+
+Normal monitoring is passive. The manual probe is the sole exception: only an explicit user action
+may send the literal `hi`, and authentication must remain inside Rust with no token logging or UI exposure.

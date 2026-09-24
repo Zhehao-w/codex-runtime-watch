@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import './style.css';
 
 type Obs={id:number,time:string,type:string,selected_model?:string,selected_effort?:string,runtime_model?:string,runtime_effort?:string,provider_model?:string,evidence:string,details?:string,result:string};
@@ -8,14 +9,14 @@ const value=(a?:string,b?:string)=>`${a||'Unknown'}${b?` / ${b}`:''}`;
 const esc=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 let filter='all';
 async function load(){
- const [rows,settings]=await Promise.all([invoke<Obs[]>('history',{filter,limit:100,offset:0}),invoke<Settings>('get_settings')]);
- document.documentElement.dataset.theme=settings.theme; const current=rows[0];
+ const [rows,settings,current]=await Promise.all([invoke<Obs[]>('history',{filter,limit:100,offset:0}),invoke<Settings>('get_settings'),invoke<Obs|null>('current_runtime')]);
+ document.documentElement.dataset.theme=settings.theme;
  app.innerHTML=`<header><div><strong>Codex Runtime Watch</strong><small>Local evidence monitor</small></div><span class="live">● Watching</span></header>
  <nav><button data-view="main" class="active">Current</button><button data-view="verify">Verify</button><button data-view="settings">Settings</button></nav>
  <main id="main"><h2>Current turn</h2>${current?card(current):'<section class="empty">No Codex turns observed yet.<br><small>Monitoring continues automatically.</small></section>'}
  <div class="title"><h2>Recent history</h2><select id="filter"><option value="all">All</option><option value="mismatches">Mismatches</option><option value="runtime">Runtime</option><option value="probes">Probes</option></select></div>
  <div class="history">${rows.map(row).join('')||'<p class="muted">History is empty.</p>'}</div><button id="clear" class="danger">Clear history</button></main>
- <main id="verify" hidden><h2>Verify backend</h2><p class="notice">Sends a separate minimal <code>hi</code> request through your installed Codex CLI. It never includes project or conversation content.</p><label>Requested model<input id="model" list="models" required></label><label>Reasoning effort<input id="effort" placeholder="high"></label><button id="probe" class="primary">Verify Backend</button><p id="probe-status"></p></main>
+ <main id="verify" hidden><h2>Verify backend</h2><p class="notice">Sends a separate minimal <code>hi</code> request to the Codex backend using your existing local login. Credentials stay in Rust and are never displayed or stored by this app.</p><label>Requested model<input id="model" list="models" required></label><label>Reasoning effort<input id="effort" placeholder="high"></label><button id="probe" class="primary">Verify Backend</button><p id="probe-status"></p></main>
  <main id="settings" hidden><h2>Settings</h2><label>Codex home<input id="home" value="${esc(settings.codex_home||'')}" placeholder="Default ~/.codex"></label><label>Initial scan days<input id="days" type="number" min="1" max="365" value="${settings.initial_scan_days}"></label><label class="check"><input id="notify" type="checkbox" ${settings.notify_mismatch?'checked':''}> Notify on mismatch</label><label class="check"><input id="login" type="checkbox" ${settings.start_at_login?'checked':''}> Start at login</label><label>Theme<select id="theme"><option>system</option><option>light</option><option>dark</option></select></label><button id="save" class="primary">Save settings</button><div class="folders"><button id="open-codex">Open Codex data folder</button><button id="open-app">Open app data folder</button></div><small>Version 0.1.0</small></main>`;
  (document.querySelector('#filter') as HTMLSelectElement).value=filter;(document.querySelector('#theme') as HTMLSelectElement).value=settings.theme;bind(settings);
 }
@@ -28,4 +29,7 @@ function bind(s:Settings){document.querySelectorAll('nav button').forEach(b=>b.a
  document.querySelector('#probe')?.addEventListener('click',async()=>{const p=document.querySelector('#probe-status')!;p.textContent='Verifying…';try{const r=await invoke<Obs>('verify_backend',{model:(document.querySelector('#model') as HTMLInputElement).value,effort:(document.querySelector('#effort') as HTMLInputElement).value});p.textContent=r.result}catch(e){p.textContent=`Probe failed: ${e}`}});
  document.querySelector('#save')?.addEventListener('click',async()=>{const n={...s,codex_home:(document.querySelector('#home') as HTMLInputElement).value||null,initial_scan_days:Number((document.querySelector('#days') as HTMLInputElement).value),notify_mismatch:(document.querySelector('#notify') as HTMLInputElement).checked,start_at_login:(document.querySelector('#login') as HTMLInputElement).checked,theme:(document.querySelector('#theme') as HTMLSelectElement).value};await invoke('save_settings',{settings:n});load()});
  document.querySelector('#open-codex')?.addEventListener('click',()=>invoke('open_folder',{kind:'codex'}));document.querySelector('#open-app')?.addEventListener('click',()=>invoke('open_folder',{kind:'app'}));}
-load().catch(e=>app.innerHTML=`<p class="error">Unable to start: ${esc(String(e))}</p>`);window.addEventListener('runtime-watch-update',()=>load());
+load().catch(e=>app.innerHTML=`<p class="error">Unable to start: ${esc(String(e))}</p>`);
+const unlistenUpdate=listen('runtime-watch-update',()=>void load());
+const unlistenVerify=listen('runtime-watch-open-verify',()=>{document.querySelector<HTMLElement>('[data-view="verify"]')?.click()});
+window.addEventListener('beforeunload',()=>{void unlistenUpdate.then(f=>f());void unlistenVerify.then(f=>f())},{once:true});

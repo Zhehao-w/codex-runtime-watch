@@ -14,7 +14,7 @@ Version 0.1.0 supports **Windows 11 x64** and **macOS Apple Silicon**.
 
 | Label | Meaning | Accepted evidence |
 |---|---|---|
-| **Selected** | The model/effort Codex configured or applied for the thread. | Authoritative `thread_settings_applied` and compatible thread-configuration events. |
+| **Selected** | The model/effort selected for this turn. | `turn_context.payload.collaboration_mode.settings` first; nested `thread_settings_applied.payload.thread_settings` is the thread fallback. |
 | **Runtime** | The local execution configuration recorded for a turn. | `turn_context.payload.model` and `turn_context.payload.effort` (including compatible field aliases). |
 | **Provider** | A model explicitly named by server/provider evidence. | Structured `model/rerouted` or server-model events only. |
 
@@ -22,24 +22,28 @@ Runtime is strong evidence about local execution configuration, but it does **no
 a remote service ultimately served. The absence of a reroute event proves nothing about provider
 identity. Runtime is therefore never copied into Provider.
 
-Evidence is correlated by thread/session and turn identifiers. Settings are scoped per thread;
-subagent parent metadata is retained rather than attributed to its root agent. Unknown or malformed
+Each rollout file is an isolated parsing scope. Its `session_meta.payload.id` supplies the canonical
+thread identity when available; otherwise a deterministic, non-path file identity plus the turn ID
+prevents files from mixing or duplicating. Settings are scoped per file/thread; subagent parent metadata is retained rather than attributed to its root agent. Unknown or malformed
 events are skipped without stopping monitoring. Raw model and effort values are preserved, including
 future values Codex Runtime Watch has never seen.
 
 ## What works
 
 * Event-driven recursive watching under the Codex session directory, incremental JSONL reads, durable
-  byte cursors, partial-line recovery, truncation recovery, restart deduplication, and a bounded
-  recent initial scan.
+  byte cursors plus per-rollout identity/settings context, partial-line recovery, truncation recovery,
+  restart deduplication, and a bounded recent initial scan.
 * Every useful normal turn is stored in SQLite, newest first, with All, Mismatches, Runtime, and
   Probes filters; records can be copied, deleted, or cleared.
 * A compact vanilla TypeScript UI with system/light/dark themes and factual mismatch results.
-* Optional inspection of structured provider events (including a conservative adapter for
-  `logs_2.sqlite`; unsupported log schemas are safely ignored).
-* Manual **Verify Backend**, which invokes the installed, authenticated `codex exec --json` command
-  only after a click and sends the isolated prompt `hi`. It parses JSONL protocol events, records a
-  separate Probe row, and reports failure rather than a mismatch when execution/auth/network fails.
+* A Windows system tray/macOS menu-bar item that opens the app or Verify page, controls OS login
+  startup, and quits explicitly. Closing the window hides it while monitoring continues.
+* Native notifications for each newly scanned runtime mismatch or explicit provider reroute when
+  enabled; probes remain in-app only.
+* Manual **Verify Backend**, which sends exactly `hi` to the Codex Responses backend only after a
+  click using the existing Codex login. It parses structured SSE `response.created.response.model`
+  (or the explicit `OpenAI-Model` response header), records a separate Probe row, and classifies
+  auth, network, capacity, and protocol failures without calling them mismatches.
 
 Codex currently does not guarantee provider-model metadata in ordinary local rollouts or CLI JSON
 output. Consequently, Provider will commonly remain **Not observed**. This is intended behavior.
@@ -47,10 +51,10 @@ output. Consequently, Provider will commonly remain **Not observed**. This is in
 ## Privacy
 
 There is no telemetry, analytics, tracking SDK, crash upload, remote database, or localhost server.
-The monitor makes zero additional OpenAI requests. It stores only model/configuration evidence and
+Normal monitoring makes zero additional OpenAI requests. It stores only model/configuration evidence and
 identifiers; it does not store prompts, responses, conversation text, source code, project files, or
-credentials. Manual Verify is the only feature that creates traffic, sends only `hi`, delegates
-authentication to the Codex CLI, and never reads or persists tokens.
+credentials. Manual Verify is the only feature that creates traffic. Authentication is read and
+used only inside Rust for that request; tokens are never returned to the UI, logged, or persisted.
 
 ## Install and run
 
@@ -58,6 +62,7 @@ Download an artifact from a tagged release, or build on the target platform:
 
 ```sh
 npm ci
+npm run generate-icons
 npm run tauri build -- --features desktop
 ```
 
@@ -70,6 +75,7 @@ For development:
 
 ```sh
 npm ci
+npm run generate-icons
 npm run tauri dev -- --features desktop
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -96,12 +102,12 @@ short busy timeout.
 ## Troubleshooting
 
 * **No observations:** Confirm Codex is installed, run a normal Codex turn, and verify the Codex home
-  path. A missing `.codex` directory is harmless; save the correct path and restart the app.
+  path. A missing `.codex` directory is harmless; saving a corrected path reconfigures the watcher immediately.
 * **Provider says Not observed:** This normally means Codex did not persist explicit provider
   identity. It is not an error and is not evidence of a match.
-* **Probe failed:** Run `codex login`, confirm `codex exec --json --model MODEL hi` works, and retry.
-  Offline, expired-auth, unavailable-model, and changed-protocol errors remain isolated Probe rows.
-* **Watcher warning/no updates:** Restart after correcting the path. Durable offsets resume complete
+* **Probe failed:** Run `codex login` and retry. Offline, expired-auth, unavailable-model, capacity,
+  and changed-protocol errors remain classified, isolated Probe rows.
+* **Watcher warning/no updates:** Save the corrected Codex home. Durable offsets resume complete
   lines and reset safely if a rollout is replaced or truncated.
 * **Database temporarily busy:** The application retries SQLite locks briefly. Close other programs
   that hold the database and retry the operation.
@@ -109,10 +115,10 @@ short busy timeout.
 ## Architecture and compatibility
 
 Data flows as: filesystem notification → incremental reader → Codex adapter → per-thread correlator
-→ factual SQLite observation → Tauri IPC/UI refresh. Schema-specific code lives under
+→ factual SQLite observation → Tauri IPC/event API UI refresh. Schema-specific code lives under
 `src-tauri/src/codex/`; persistence and settings remain independent. The highest compatibility risks
-are upstream rollout event names/paths, provider-notification shapes, the optional `logs_2.sqlite`
-schema, and `codex exec --json` output. These adapters deliberately tolerate unknown fields and fail
+are upstream rollout event names/paths, provider-notification shapes, and Responses SSE metadata.
+The app does not inspect `logs_2.sqlite`. These adapters deliberately tolerate unknown fields and fail
 closed for provider identity.
 
 The implementation was researched against current OpenAI Codex source: rollout items include turn
@@ -125,10 +131,8 @@ the normal response to upstream format changes.
 
 * Provider evidence is only as available as Codex's persisted structured events; raw network traces
   are neither required nor enabled.
-* Manual Verify uses the supported local Codex CLI rather than accessing credentials directly. If
-  its structured output omits server model identity, the successful probe says Provider not observed.
-* Start-at-login is represented in settings for platform packaging integration; users of unsigned
-  0.1.0 builds should add the app to Login Items/Startup Apps manually.
+* Manual Verify depends on the current Codex web authentication/backend protocol. If explicit model
+  evidence is absent, the probe is a protocol failure rather than guessed verification.
 * Signing and notarization are release-operator responsibilities.
 
 ## License
