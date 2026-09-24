@@ -23,7 +23,7 @@ impl Database {
         Ok(Self(c))
     }
     pub fn insert(&self, o: &Observation) -> Result<i64> {
-        self.0.execute("INSERT INTO observations(time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,turn_id,type) WHERE turn_id IS NOT NULL DO UPDATE SET selected_model=COALESCE(excluded.selected_model,selected_model),selected_effort=COALESCE(excluded.selected_effort,selected_effort),runtime_model=COALESCE(excluded.runtime_model,runtime_model),runtime_effort=COALESCE(excluded.runtime_effort,runtime_effort),provider_model=COALESCE(excluded.provider_model,provider_model),evidence=excluded.evidence,details=excluded.details",params![o.time,o.kind,o.session_id,o.turn_id,o.selected_model,o.selected_effort,o.runtime_model,o.runtime_effort,o.provider_model,o.evidence,o.details])?;
+        self.0.execute("INSERT INTO observations(time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,turn_id,type) WHERE turn_id IS NOT NULL DO UPDATE SET time=excluded.time,selected_model=COALESCE(excluded.selected_model,selected_model),selected_effort=COALESCE(excluded.selected_effort,selected_effort),runtime_model=COALESCE(excluded.runtime_model,runtime_model),runtime_effort=COALESCE(excluded.runtime_effort,runtime_effort),provider_model=COALESCE(excluded.provider_model,provider_model),evidence=excluded.evidence,details=excluded.details",params![o.time,o.kind,o.session_id,o.turn_id,o.selected_model,o.selected_effort,o.runtime_model,o.runtime_effort,o.provider_model,o.evidence,o.details])?;
         Ok(self.0.last_insert_rowid())
     }
     fn turn(
@@ -87,7 +87,7 @@ impl Database {
         let predicate = match filter {
             "runtime" => "type='Runtime'",
             "probes" => "type='Probe'",
-            "mismatches" => "type='Runtime' AND ((provider_model IS NOT NULL AND (selected_model IS NULL OR provider_model != selected_model)) OR (selected_model IS NOT NULL AND runtime_model IS NOT NULL AND selected_model != runtime_model) OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort))",
+            "mismatches" => "type='Runtime' AND ((provider_model IS NOT NULL AND selected_model IS NOT NULL AND provider_model != selected_model) OR (provider_model IS NOT NULL AND selected_model IS NULL AND (json_extract(details,'$.provider_evidence')='model/rerouted' OR evidence='model/rerouted')) OR (selected_model IS NOT NULL AND runtime_model IS NOT NULL AND selected_model != runtime_model) OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort))",
             _ => "1=1",
         };
         let sql = format!("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations WHERE {predicate} ORDER BY time DESC,id DESC LIMIT ? OFFSET ?");
@@ -154,7 +154,11 @@ fn merge_observations(existing: &Observation, incoming: &Observation) -> Observa
     };
     Observation {
         id: existing.id,
-        time: existing.time.clone(),
+        time: if turn_context {
+            incoming.time.clone()
+        } else {
+            existing.time.clone()
+        },
         kind: existing.kind.clone(),
         session_id: existing.session_id.clone(),
         turn_id: existing.turn_id.clone(),

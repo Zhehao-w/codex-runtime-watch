@@ -42,6 +42,21 @@ impl Observation {
         matches!((&self.selected_model, &self.provider_model), (Some(a), Some(b)) if a != b)
     }
 
+    pub fn provider_was_rerouted(&self) -> bool {
+        self.provider_model.is_some()
+            && self
+                .details
+                .as_deref()
+                .and_then(|details| serde_json::from_str::<serde_json::Value>(details).ok())
+                .and_then(|details| {
+                    details
+                        .get("provider_evidence")
+                        .and_then(|evidence| evidence.as_str())
+                        .map(|evidence| evidence == "model/rerouted")
+                })
+                .unwrap_or_else(|| self.evidence == "model/rerouted")
+    }
+
     pub fn has_runtime_mismatch(&self) -> bool {
         self.runtime_model_mismatch() || self.runtime_effort_mismatch()
     }
@@ -49,7 +64,7 @@ impl Observation {
     pub fn has_any_mismatch_or_reroute(&self) -> bool {
         self.has_runtime_mismatch()
             || self.provider_model_mismatch()
-            || (self.provider_model.is_some() && self.selected_model.is_none())
+            || (self.selected_model.is_none() && self.provider_was_rerouted())
     }
 
     fn probe_failed(&self) -> bool {
@@ -69,22 +84,23 @@ impl Observation {
     }
 
     fn runtime_result(&self) -> Option<&'static str> {
-        if !self.runtime_model_comparable() {
-            return None;
+        let model = self
+            .runtime_model_comparable()
+            .then(|| !self.runtime_model_mismatch());
+        let effort = self
+            .runtime_effort_comparable()
+            .then(|| !self.runtime_effort_mismatch());
+        match (model, effort) {
+            (Some(true), Some(true)) => Some("Runtime match"),
+            (Some(false), Some(false)) => Some("Runtime model + effort mismatch"),
+            (Some(false), Some(true)) => Some("Runtime model mismatch"),
+            (Some(true), Some(false)) => Some("Runtime effort mismatch"),
+            (Some(true), None) => Some("Runtime model match · effort not observed"),
+            (Some(false), None) => Some("Runtime model mismatch · effort not observed"),
+            (None, Some(true)) => Some("Runtime effort match · model not observed"),
+            (None, Some(false)) => Some("Runtime effort mismatch · model not observed"),
+            (None, None) => None,
         }
-        Some(
-            match (
-                self.runtime_model_mismatch(),
-                self.runtime_effort_mismatch(),
-                self.runtime_effort_comparable(),
-            ) {
-                (true, true, _) => "Runtime model + effort mismatch",
-                (true, false, _) => "Runtime model mismatch",
-                (false, true, _) => "Runtime effort mismatch",
-                (false, false, true) => "Runtime match",
-                (false, false, false) => "Runtime model match · effort not observed",
-            },
-        )
     }
 
     pub fn result(&self) -> String {
@@ -105,7 +121,8 @@ impl Observation {
             .map(|provider| match &self.selected_model {
                 Some(selected) if selected == provider => "Provider match",
                 Some(_) => "Provider mismatch",
-                None => "Provider reroute",
+                None if self.provider_was_rerouted() => "Provider reroute",
+                None => "Provider observed",
             });
         match (provider, self.runtime_result()) {
             (Some(provider), Some(runtime)) => format!("{provider} · {runtime}"),

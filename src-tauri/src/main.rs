@@ -342,6 +342,7 @@ fn main() {
                                 let _ = handle.emit("runtime-watch-update", ());
                             } else if let Ok(mut status) = thread_status.lock() {
                                 *status = "Watcher error".into();
+                                let _ = handle.emit("runtime-watch-update", ());
                             }
                         }
                         WatchCommand::Path(path) => {

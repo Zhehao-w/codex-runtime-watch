@@ -45,7 +45,7 @@ jobs:
       - run: npm ci
       - run: npm run generate-icons
       - run: npm run tauri build -- --features desktop ${{ matrix.args }}
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.files }}
           fail_on_unmatched_files: true

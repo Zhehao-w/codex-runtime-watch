@@ -3,7 +3,7 @@ use crate::Observation;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn string(v: &Value, paths: &[&str]) -> Option<String> {
     paths
@@ -101,6 +101,7 @@ pub fn adapt(v: &Value) -> Option<Evidence> {
 pub struct Correlator {
     selected: HashMap<String, (Option<String>, Option<String>)>,
     sessions: HashMap<String, (String, Option<String>, bool)>,
+    scope_keys: HashMap<String, HashSet<String>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -135,6 +136,10 @@ impl Correlator {
             let selected = (e.selected_model, e.selected_effort);
             self.selected.insert(key.clone(), selected.clone());
             self.selected.insert(scope.to_owned(), selected);
+            self.scope_keys
+                .entry(scope.to_owned())
+                .or_default()
+                .extend([key, scope.to_owned()]);
             return None;
         }
         let turn = e.turn_id.clone()?;
@@ -188,25 +193,38 @@ impl Correlator {
                 (session.clone(), state.parent_thread, state.is_subagent),
             );
             self.selected.insert(
-                session,
+                session.clone(),
                 (state.selected_model.clone(), state.selected_effort.clone()),
             );
+            self.scope_keys
+                .entry(scope.to_owned())
+                .or_default()
+                .insert(session);
         }
         self.selected.insert(
             scope.to_owned(),
             (state.selected_model, state.selected_effort),
         );
+        self.scope_keys
+            .entry(scope.to_owned())
+            .or_default()
+            .insert(scope.to_owned());
     }
 
     pub fn reset_scope(&mut self, scope: &str) {
         if let Some((session, _, _)) = self.sessions.remove(scope) {
             self.selected.remove(&session);
         }
+        if let Some(keys) = self.scope_keys.remove(scope) {
+            for key in keys {
+                self.selected.remove(&key);
+            }
+        }
         self.selected.remove(scope);
     }
 
     pub fn retained_entries(&self) -> usize {
-        self.selected.len() + self.sessions.len()
+        self.selected.len() + self.sessions.len() + self.scope_keys.len()
     }
 
     pub fn persist_scope(&self, scope: &str) -> String {

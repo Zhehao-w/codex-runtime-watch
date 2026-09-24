@@ -115,6 +115,9 @@ pub fn scan_file_observations(
         scope: serde_json::from_str(&c.persist_scope(&scope))?,
     };
     db.set_offset(&key, offset, Some(&serde_json::to_string(&metadata)?))?;
+    // scan_state owns the durable parser context. Releasing this scope keeps
+    // memory bounded by active scans rather than lifetime rollout-file count.
+    c.reset_scope(&scope);
     Ok(observations)
 }
 
