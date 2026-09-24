@@ -1,6 +1,7 @@
 use super::{models::Evidence, provider::explicit_provider};
 use crate::Observation;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -102,6 +103,16 @@ pub struct Correlator {
     sessions: HashMap<String, (String, Option<String>, bool)>,
     pending: HashMap<String, Observation>,
 }
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PersistedScope {
+    session: Option<String>,
+    parent_thread: Option<String>,
+    is_subagent: bool,
+    selected_model: Option<String>,
+    selected_effort: Option<String>,
+}
+
 impl Correlator {
     pub fn push(&mut self, e: Evidence) -> Option<Observation> {
         self.push_scoped("default", e)
@@ -174,5 +185,49 @@ impl Correlator {
             o.details = Some(serde_json::json!({"provider_reason":e.provider_reason}).to_string())
         }
         Some(o.clone())
+    }
+
+    pub fn restore_scope(&mut self, scope: &str, metadata: &str) {
+        let Ok(state) = serde_json::from_str::<PersistedScope>(metadata) else {
+            return;
+        };
+        if let Some(session) = state.session {
+            self.sessions.insert(
+                scope.to_owned(),
+                (session.clone(), state.parent_thread, state.is_subagent),
+            );
+            self.selected.insert(
+                session,
+                (state.selected_model.clone(), state.selected_effort.clone()),
+            );
+        }
+        self.selected.insert(
+            scope.to_owned(),
+            (state.selected_model, state.selected_effort),
+        );
+    }
+
+    pub fn reset_scope(&mut self, scope: &str) {
+        if let Some((session, _, _)) = self.sessions.remove(scope) {
+            self.selected.remove(&session);
+        }
+        self.selected.remove(scope);
+        self.pending
+            .retain(|identity, _| !identity.starts_with(&format!("{scope}:")));
+    }
+
+    pub fn persist_scope(&self, scope: &str) -> String {
+        let session = self.sessions.get(scope);
+        let selected = session
+            .and_then(|value| self.selected.get(&value.0))
+            .or_else(|| self.selected.get(scope));
+        serde_json::to_string(&PersistedScope {
+            session: session.map(|value| value.0.clone()),
+            parent_thread: session.and_then(|value| value.1.clone()),
+            is_subagent: session.is_some_and(|value| value.2),
+            selected_model: selected.and_then(|value| value.0.clone()),
+            selected_effort: selected.and_then(|value| value.1.clone()),
+        })
+        .expect("persisted rollout scope is serializable")
     }
 }

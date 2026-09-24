@@ -71,8 +71,15 @@ fn current_runtime(state: tauri::State<State>) -> Result<Option<View>, String> {
     }))
 }
 #[tauri::command]
-fn get_settings(state: tauri::State<State>) -> Settings {
-    Settings::load(&state.settings_path)
+fn get_settings(app: tauri::AppHandle, state: tauri::State<State>) -> Settings {
+    let mut settings = Settings::load(&state.settings_path);
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        if settings.start_at_login != enabled {
+            settings.start_at_login = enabled;
+            let _ = settings.save(&state.settings_path);
+        }
+    }
+    settings
 }
 #[tauri::command]
 fn save_settings(
@@ -120,16 +127,22 @@ fn clear_history(state: tauri::State<State>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn verify_backend(
-    state: tauri::State<State>,
+async fn verify_backend(
+    app: tauri::AppHandle,
     model: String,
     effort: String,
 ) -> Result<View, String> {
     if model.trim().is_empty() {
         return Err("Model is required".into());
     }
-    let home = codex_home(&Settings::load(&state.settings_path));
-    let mut o = probe::run(&home, model, effort);
+    let home = {
+        let state = app.state::<State>();
+        codex_home(&Settings::load(&state.settings_path))
+    };
+    let mut o = tauri::async_runtime::spawn_blocking(move || probe::run(&home, model, effort))
+        .await
+        .map_err(|e| format!("Probe task failed: {e}"))?;
+    let state = app.state::<State>();
     o.id = Some(
         state
             .db
@@ -166,15 +179,17 @@ fn scan_path(
     }
     let _ = handle.emit("runtime-watch-update", ());
     if notify {
-        for observation in observations.into_iter().filter(|o| {
-            o.kind == "Runtime"
-                && (o.result().contains("mismatch") || o.result().contains("reroute"))
+        for change in observations.into_iter().filter(|change| {
+            change.notify
+                && change.observation.kind == "Runtime"
+                && (change.observation.result().contains("mismatch")
+                    || change.observation.result().contains("reroute"))
         }) {
             let _ = handle
                 .notification()
                 .builder()
                 .title("Codex Runtime Watch")
-                .body(observation.result())
+                .body(change.observation.result())
                 .show();
         }
     }
@@ -200,11 +215,18 @@ fn main() {
             let app_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_dir)?;
             let settings_path = app_dir.join("settings.json");
-            let settings = Settings::load(&settings_path);
+            let mut settings = Settings::load(&settings_path);
+            if let Ok(enabled) = app.autolaunch().is_enabled() {
+                if settings.start_at_login != enabled {
+                    settings.start_at_login = enabled;
+                    settings.save(&settings_path)?;
+                }
+            }
             let home = codex_home(&settings);
             let initial_scan_days = settings.initial_scan_days;
             let notify_mismatch = settings.notify_mismatch;
             let db_path = app_dir.join("runtime-watch.sqlite");
+            let tray_settings_path = settings_path.clone();
             let (command_tx, command_rx) = std::sync::mpsc::channel();
             app.manage(State {
                 db: Mutex::new(Database::open(&db_path)?),
@@ -291,15 +313,22 @@ fn main() {
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open" => show_main(app, false),
                     "verify" => show_main(app, true),
                     "login" => {
                         let manager = app.autolaunch();
-                        if manager.is_enabled().unwrap_or(false) {
-                            let _ = manager.disable();
+                        let enabled = manager.is_enabled().unwrap_or(false);
+                        let changed = if enabled {
+                            manager.disable().map(|_| false)
                         } else {
-                            let _ = manager.enable();
+                            manager.enable().map(|_| true)
+                        };
+                        if let Ok(enabled) = changed {
+                            let mut settings = Settings::load(&tray_settings_path);
+                            settings.start_at_login = enabled;
+                            let _ = settings.save(&tray_settings_path);
+                            let _ = app.emit("runtime-watch-update", ());
                         }
                     }
                     "quit" => app.exit(0),

@@ -4,6 +4,14 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
 pub struct Database(pub Connection);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationChange {
+    New,
+    Updated { notify: bool },
+    Unchanged,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(p) = path.parent() {
@@ -18,22 +26,30 @@ impl Database {
         self.0.execute("INSERT INTO observations(time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,turn_id,type) WHERE turn_id IS NOT NULL DO UPDATE SET selected_model=COALESCE(excluded.selected_model,selected_model),selected_effort=COALESCE(excluded.selected_effort,selected_effort),runtime_model=COALESCE(excluded.runtime_model,runtime_model),runtime_effort=COALESCE(excluded.runtime_effort,runtime_effort),provider_model=COALESCE(excluded.provider_model,provider_model),evidence=excluded.evidence,details=excluded.details",params![o.time,o.kind,o.session_id,o.turn_id,o.selected_model,o.selected_effort,o.runtime_model,o.runtime_effort,o.provider_model,o.evidence,o.details])?;
         Ok(self.0.last_insert_rowid())
     }
-    pub fn contains_turn(
+    fn turn(
         &self,
         session: Option<&str>,
         turn: Option<&str>,
         kind: &str,
-    ) -> Result<bool> {
-        let Some(turn) = turn else { return Ok(false) };
-        Ok(self
-            .0
-            .query_row(
-                "SELECT 1 FROM observations WHERE session_id IS ? AND turn_id=? AND type=? LIMIT 1",
-                params![session, turn, kind],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
+    ) -> Result<Option<Observation>> {
+        let Some(turn) = turn else { return Ok(None) };
+        self.0.query_row("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations WHERE session_id IS ? AND turn_id=? AND type=? LIMIT 1", params![session,turn,kind], |r| Ok(Observation { id:r.get(0)?,time:r.get(1)?,kind:r.get(2)?,session_id:r.get(3)?,turn_id:r.get(4)?,selected_model:r.get(5)?,selected_effort:r.get(6)?,runtime_model:r.get(7)?,runtime_effort:r.get(8)?,provider_model:r.get(9)?,evidence:r.get(10)?,details:r.get(11)? })).optional().map_err(Into::into)
+    }
+    pub fn upsert_turn(&self, o: &Observation) -> Result<(ObservationChange, Observation)> {
+        let before = self.turn(o.session_id.as_deref(), o.turn_id.as_deref(), &o.kind)?;
+        self.insert(o)?;
+        let Some(after) = self.turn(o.session_id.as_deref(), o.turn_id.as_deref(), &o.kind)? else {
+            anyhow::bail!("turn upsert did not produce an observation")
+        };
+        let change = match before {
+            None => ObservationChange::New,
+            Some(before) if before == after => ObservationChange::Unchanged,
+            Some(before) => ObservationChange::Updated {
+                notify: before.provider_model != after.provider_model
+                    && after.provider_model.is_some(),
+            },
+        };
+        Ok((change, after))
     }
     pub fn offset(&self, p: &str) -> Result<u64> {
         Ok(self
@@ -43,6 +59,17 @@ impl Database {
             })
             .optional()?
             .unwrap_or(0) as u64)
+    }
+    pub fn scan_state(&self, p: &str) -> Result<(u64, Option<String>)> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT offset,metadata FROM scan_state WHERE source=?",
+                [p],
+                |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)),
+            )
+            .optional()?
+            .unwrap_or((0, None)))
     }
     pub fn set_offset(&self, p: &str, n: u64, meta: Option<&str>) -> Result<()> {
         self.0.execute("INSERT INTO scan_state(source,offset,metadata) VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET offset=excluded.offset,metadata=excluded.metadata",params![p,n as i64,meta])?;

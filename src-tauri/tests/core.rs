@@ -74,6 +74,66 @@ fn file_scope_is_fallback_and_subagents_do_not_mix() {
 }
 
 #[test]
+fn scanner_restores_rollout_context_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("watch.db")).unwrap();
+    let path = dir.path().join("sessions-resumed.jsonl");
+    let mut file = std::fs::File::create(&path).unwrap();
+    writeln!(file, "{}", json!({"type":"session_meta","payload":{"id":"canonical-thread","session_id":"root-session","parent_thread_id":"parent","agent_path":"/root/child"}})).unwrap();
+    writeln!(file, "{}", json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"canonical-thread","thread_settings":{"model":"selected-model","reasoning_effort":"high"}}})).unwrap();
+    writeln!(file, "{}", json!({"type":"turn_context","payload":{"turn_id":"before-restart","model":"runtime-model","effort":"high"}})).unwrap();
+    let mut before = Correlator::default();
+    assert_eq!(scan_file(&db, &path, &mut before).unwrap(), 1);
+
+    writeln!(file, "{}", json!({"type":"turn_context","payload":{"turn_id":"after-restart","model":"runtime-model","effort":"high"}})).unwrap();
+    let mut after = Correlator::default();
+    assert_eq!(scan_file(&db, &path, &mut after).unwrap(), 1);
+    let rows = db.history("runtime", 10, 0).unwrap();
+    let resumed = rows
+        .iter()
+        .find(|row| row.turn_id.as_deref() == Some("after-restart"))
+        .unwrap();
+    assert_eq!(resumed.session_id.as_deref(), Some("canonical-thread"));
+    assert_eq!(resumed.selected_model.as_deref(), Some("selected-model"));
+    assert_eq!(resumed.selected_effort.as_deref(), Some("high"));
+    assert!(resumed.details.as_deref().unwrap().contains("parent"));
+}
+
+#[test]
+fn later_provider_evidence_reports_one_material_update() {
+    use codex_runtime_watch::codex::watcher::scan_file_observations;
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("watch.db")).unwrap();
+    let path = dir.path().join("sessions-provider.jsonl");
+    let mut file = std::fs::File::create(&path).unwrap();
+    writeln!(file, "{}", json!({"type":"session_meta","payload":{"id":"thread-provider","session_id":"thread-provider"}})).unwrap();
+    writeln!(file, "{}", json!({"type":"turn_context","payload":{"turn_id":"turn-provider","model":"requested","effort":"high","collaboration_mode":{"settings":{"model":"requested","reasoning_effort":"high"}}}})).unwrap();
+    let mut correlator = Correlator::default();
+    assert_eq!(
+        scan_file_observations(&db, &path, &mut correlator)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let reroute = json!({"method":"model/rerouted","params":{"threadId":"thread-provider","turnId":"turn-provider","fromModel":"requested","toModel":"served","reason":"capacity"}});
+    writeln!(file, "{reroute}").unwrap();
+    let changed = scan_file_observations(&db, &path, &mut correlator).unwrap();
+    assert_eq!(changed.len(), 1);
+    assert!(changed[0].notify);
+    assert_eq!(
+        changed[0].observation.provider_model.as_deref(),
+        Some("served")
+    );
+    assert_eq!(db.history("runtime", 10, 0).unwrap().len(), 1);
+
+    writeln!(file, "{reroute}").unwrap();
+    assert!(scan_file_observations(&db, &path, &mut correlator)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn provider_accepts_current_envelope_not_unstructured_text() {
     let v = json!({"method":"model/rerouted","params":{"threadId":"thread","turnId":"turn","fromModel":"gpt-a","toModel":"gpt-b","reason":"highRiskCyberActivity"}});
     assert_eq!(explicit_provider(&v).unwrap().0, "gpt-b");

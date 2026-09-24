@@ -31,8 +31,8 @@ future values Codex Runtime Watch has never seen.
 ## What works
 
 * Event-driven recursive watching under the Codex session directory, incremental JSONL reads, durable
-  byte cursors, partial-line recovery, truncation recovery, restart deduplication, and a bounded
-  recent initial scan.
+  byte cursors plus per-rollout identity/settings context, partial-line recovery, truncation recovery,
+  restart deduplication, and a bounded recent initial scan.
 * Every useful normal turn is stored in SQLite, newest first, with All, Mismatches, Runtime, and
   Probes filters; records can be copied, deleted, or cleared.
 * A compact vanilla TypeScript UI with system/light/dark themes and factual mismatch results.
