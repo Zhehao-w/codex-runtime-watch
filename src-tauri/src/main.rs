@@ -235,6 +235,7 @@ fn main() {
                 watcher: Mutex::new(command_tx.clone()),
             });
             let handle = app.handle().clone();
+            let watcher_tx = command_tx.clone();
             std::thread::spawn(move || {
                 let db = match Database::open(&db_path) {
                     Ok(x) => x,
@@ -247,7 +248,7 @@ fn main() {
                     match command {
                         WatchCommand::Configure(home, days, notifications) => {
                             notify_enabled = notifications;
-                            watcher = None;
+                            drop(watcher.take());
                             if !home.exists() {
                                 continue;
                             }
@@ -266,7 +267,7 @@ fn main() {
                             {
                                 scan_path(&db, entry.path(), &mut corr, &handle, false);
                             }
-                            let tx = command_tx.clone();
+                            let tx = watcher_tx.clone();
                             watcher = notify::recommended_watcher(
                                 move |event: notify::Result<notify::Event>| {
                                     if let Ok(event) = event {
