@@ -42,19 +42,55 @@ impl Observation {
         matches!((&self.selected_model, &self.provider_model), (Some(a), Some(b)) if a != b)
     }
 
+    fn detail_is(&self, key: &str, expected: &str) -> bool {
+        self.details
+            .as_deref()
+            .and_then(|details| serde_json::from_str::<serde_json::Value>(details).ok())
+            .and_then(|details| {
+                details
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .map(|value| value == expected)
+            })
+            .unwrap_or(false)
+    }
+
+    fn detail_bool(&self, key: &str) -> bool {
+        self.details
+            .as_deref()
+            .and_then(|details| serde_json::from_str::<serde_json::Value>(details).ok())
+            .and_then(|details| details.get(key).and_then(|value| value.as_bool()))
+            .unwrap_or(false)
+    }
+
+    pub fn has_turn_context(&self) -> bool {
+        self.detail_is("runtime_evidence", "turn_context")
+            || self
+                .evidence
+                .split(" + ")
+                .any(|evidence| evidence == "turn_context")
+    }
+
+    pub fn provider_model_comparable(&self) -> bool {
+        self.has_turn_context() && self.selected_model.is_some() && self.provider_model.is_some()
+    }
+
+    pub fn provider_model_mismatch_authoritative(&self) -> bool {
+        self.provider_model_comparable() && self.provider_model_mismatch()
+    }
+
     pub fn provider_was_rerouted(&self) -> bool {
         self.provider_model.is_some()
-            && self
-                .details
-                .as_deref()
-                .and_then(|details| serde_json::from_str::<serde_json::Value>(details).ok())
-                .and_then(|details| {
-                    details
-                        .get("provider_evidence")
-                        .and_then(|evidence| evidence.as_str())
-                        .map(|evidence| evidence == "model/rerouted")
-                })
-                .unwrap_or_else(|| self.evidence == "model/rerouted")
+            && (self.detail_bool("provider_rerouted")
+                || self.detail_is("provider_evidence", "model/rerouted")
+                || self
+                    .evidence
+                    .split(" + ")
+                    .any(|evidence| evidence == "model/rerouted"))
+    }
+
+    fn has_provider_alert(&self) -> bool {
+        self.provider_model_mismatch_authoritative() || self.provider_was_rerouted()
     }
 
     pub fn has_runtime_mismatch(&self) -> bool {
@@ -62,9 +98,14 @@ impl Observation {
     }
 
     pub fn has_any_mismatch_or_reroute(&self) -> bool {
-        self.has_runtime_mismatch()
-            || self.provider_model_mismatch()
-            || (self.selected_model.is_none() && self.provider_was_rerouted())
+        self.has_runtime_mismatch() || self.has_provider_alert()
+    }
+
+    pub fn has_new_alert_since(&self, before: &Observation) -> bool {
+        (!before.runtime_model_mismatch() && self.runtime_model_mismatch())
+            || (!before.runtime_effort_mismatch() && self.runtime_effort_mismatch())
+            || (!before.has_provider_alert() && self.provider_model_mismatch_authoritative())
+            || (!before.provider_was_rerouted() && self.provider_was_rerouted())
     }
 
     fn probe_failed(&self) -> bool {
@@ -115,15 +156,25 @@ impl Observation {
             }
             .into();
         }
-        let provider = self
-            .provider_model
-            .as_ref()
-            .map(|provider| match &self.selected_model {
-                Some(selected) if selected == provider => "Provider match",
-                Some(_) => "Provider mismatch",
-                None if self.provider_was_rerouted() => "Provider reroute",
-                None => "Provider observed",
-            });
+        let provider = self.provider_model.as_ref().map(|provider| {
+            if !self.provider_model_comparable() {
+                if self.provider_was_rerouted() {
+                    "Provider reroute"
+                } else {
+                    "Provider observed"
+                }
+            } else {
+                match (&self.selected_model, self.provider_was_rerouted()) {
+                    (Some(selected), true) if selected == provider => {
+                        "Provider match · reroute observed"
+                    }
+                    (Some(_), true) => "Provider mismatch · reroute observed",
+                    (Some(selected), false) if selected == provider => "Provider match",
+                    (Some(_), false) => "Provider mismatch",
+                    (None, _) => "Provider observed",
+                }
+            }
+        });
         match (provider, self.runtime_result()) {
             (Some(provider), Some(runtime)) => format!("{provider} · {runtime}"),
             (Some(provider), None) => provider.into(),

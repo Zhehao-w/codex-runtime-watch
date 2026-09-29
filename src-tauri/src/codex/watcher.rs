@@ -90,10 +90,13 @@ pub fn scan_file_observations(
                 if let Some(observation) = c.push_scoped(&scope, evidence) {
                     let (change, observation) = db.upsert_turn(&observation)?;
                     match change {
-                        ObservationChange::New => observations.push(ScanObservation {
-                            observation,
-                            notify: true,
-                        }),
+                        ObservationChange::New => {
+                            let notify = observation.has_any_mismatch_or_reroute();
+                            observations.push(ScanObservation {
+                                observation,
+                                notify,
+                            });
+                        }
                         ObservationChange::Updated { notify } => {
                             observations.push(ScanObservation {
                                 observation,

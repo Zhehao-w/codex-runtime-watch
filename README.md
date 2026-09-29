@@ -25,8 +25,9 @@ if they are actually persisted in a watched rollout. The absence of Provider evi
 about provider identity. Runtime is therefore never copied into Provider.
 
 Each rollout file is an isolated parsing scope. Its `session_meta.payload.id` supplies the canonical
-thread identity when available; otherwise a deterministic, non-path file identity plus the turn ID
-prevents files from mixing or duplicating. Settings are scoped per file/thread; subagent parent metadata is retained rather than attributed to its root agent. Unknown or malformed
+thread identity when available; otherwise a deterministic file-scope identity derived from the rollout
+path plus the turn ID prevents files from mixing or duplicating. Settings are scoped per file/thread;
+subagent parent metadata is retained rather than attributed to its root agent. Unknown or malformed
 events are skipped without stopping monitoring. Raw model and effort values are preserved, including
 future values Codex Runtime Watch has never seen.
 
@@ -40,13 +41,15 @@ future values Codex Runtime Watch has never seen.
 * A compact vanilla TypeScript UI with system/light/dark themes and factual mismatch results.
 * A Windows system tray/macOS menu-bar item that opens the app or Verify page, controls OS login
   startup, and quits explicitly. Closing the window hides it while monitoring continues.
-* Native notifications for each newly scanned runtime mismatch or explicit provider reroute when
-  enabled and OS permission is granted; permission is requested at startup or when notifications are
-  explicitly enabled, and denial never stops monitoring. Probes remain in-app only.
+* Native notifications for each newly observed runtime mismatch or explicit provider reroute when
+  enabled and OS permission is granted. Provisional provider evidence that only has a thread-level
+  Selected fallback is not announced as a provider mismatch; notification decisions use factual state
+  transitions so later evidence does not repeat an already-reported mismatch.
 * Manual **Verify Backend**, which sends exactly `hi` to the Codex Responses backend only after a
-  click using the existing Codex login. It parses structured SSE `response.created.response.model`
-  (or the explicit `OpenAI-Model` response header), records a separate Probe row, and classifies
-  auth, network, capacity, and protocol failures without calling them mismatches.
+  click using the existing Codex login. Explicit `OpenAI-Model` evidence from the HTTP response or
+  structured SSE metadata takes precedence over `response.created.response.model`; the latter is kept
+  only as a bounded fallback. Verify records a separate Probe row and classifies auth, network,
+  capacity, and protocol failures without calling them mismatches.
 
 Codex currently exposes `model/rerouted` through its app-server notification protocol, which this
 application does not actively connect to or subscribe to. Normal Provider is populated only when
@@ -108,13 +111,17 @@ without repeated background prompts and does not affect recording.
 ## Troubleshooting
 
 * **No observations:** Confirm Codex is installed, run a normal Codex turn, and verify the Codex home
-  path. A missing `.codex` directory is harmless; saving a corrected path reconfigures the watcher immediately.
+  path. If the Codex home or `sessions` directory does not exist yet, the watcher waits and retries
+  periodically, then attaches automatically when Codex creates the directory; saving a corrected
+  custom path also reconfigures the watcher immediately.
 * **Provider says Not observed:** This normally means Codex did not persist explicit provider
   identity. It is not an error and is not evidence of a match.
-* **Probe failed:** Run `codex login` and retry. Offline, expired-auth, unavailable-model, capacity,
-  and changed-protocol errors remain classified, isolated Probe rows.
-* **Watcher warning/no updates:** Save the corrected Codex home. Durable offsets resume complete
-  lines and reset safely if a rollout is replaced or truncated.
+* **Probe failed:** Run Codex once so its normal authentication flow can refresh credentials; if that
+  does not help, run `codex login` and retry. Offline, expired-auth, unavailable-model, capacity, and
+  changed-protocol errors remain classified, isolated Probe rows.
+* **Watcher warning/no updates:** A transient file rename/delete race is ignored, but persistent file,
+  fingerprint, or database scan failures surface as **Watcher warning** instead of being reported as
+  healthy. Saving the corrected Codex home reconfigures the watcher.
 * **Database temporarily busy:** The application retries SQLite locks briefly. Close other programs
   that hold the database and retry the operation.
 
@@ -138,6 +145,9 @@ the normal response to upstream format changes.
 * Provider evidence is only as available as Codex's persisted structured events; live app-server
   notifications and raw network traces are not subscribed or enabled. Manual Verify is the explicit
   independent provider check.
+* Manual Verify currently reads file-backed Codex ChatGPT credentials from `auth.json`; it does not
+  independently run Codex's OAuth refresh flow or read credentials stored only in an OS keyring. If
+  authentication is stale, run Codex normally to let it refresh, or sign in again, then retry Verify.
 * Manual Verify depends on the current Codex web authentication/backend protocol. If explicit model
   evidence is absent, the probe is a protocol failure rather than guessed verification.
 * Signing and notarization are release-operator responsibilities.

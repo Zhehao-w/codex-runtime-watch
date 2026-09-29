@@ -158,7 +158,10 @@ fn realistic_probe_sse_is_structured() {
         parse_sse("data: {\"type\":\"output_text\",\"text\":\"model: fake\"}\n").model,
         None
     );
-    assert_eq!(parse_sse("data: {\"type\":\"response.created\",\"response\":{\"headers\":{\"OpenAI-Model\":\"gpt-header\"}}}\n").model, None);
+    assert_eq!(
+        parse_sse("data: {\"type\":\"response.created\",\"response\":{\"headers\":{\"OpenAI-Model\":\"gpt-header\"}}}\n").model.as_deref(),
+        Some("gpt-header")
+    );
 }
 
 #[test]
