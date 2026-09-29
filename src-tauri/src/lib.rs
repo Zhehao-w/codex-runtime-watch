@@ -104,8 +104,7 @@ impl Observation {
     pub fn has_new_alert_since(&self, before: &Observation) -> bool {
         (!before.runtime_model_mismatch() && self.runtime_model_mismatch())
             || (!before.runtime_effort_mismatch() && self.runtime_effort_mismatch())
-            || (!before.provider_model_mismatch_authoritative()
-                && self.provider_model_mismatch_authoritative())
+            || (!before.has_provider_alert() && self.provider_model_mismatch_authoritative())
             || (!before.provider_was_rerouted() && self.provider_was_rerouted())
     }
 
