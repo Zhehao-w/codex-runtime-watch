@@ -63,14 +63,17 @@ fn header_model(headers: &Value) -> Option<String> {
 }
 
 fn http_header_model(headers: &HeaderMap) -> Option<(String, String)> {
-    [("openai-model", "http OpenAI-Model"), ("x-openai-model", "http X-OpenAI-Model")]
-        .into_iter()
-        .find_map(|(name, source)| {
-            headers
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(|model| (model.to_owned(), source.to_owned()))
-        })
+    [
+        ("openai-model", "http OpenAI-Model"),
+        ("x-openai-model", "http X-OpenAI-Model"),
+    ]
+    .into_iter()
+    .find_map(|(name, source)| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|model| (model.to_owned(), source.to_owned()))
+    })
 }
 
 fn parse_data(data: &str) -> Option<ParsedFrame> {
