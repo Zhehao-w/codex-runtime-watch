@@ -52,9 +52,7 @@ impl Database {
             None => ObservationChange::New,
             Some(before) if before == after => ObservationChange::Unchanged,
             Some(before) => ObservationChange::Updated {
-                notify: after.has_any_mismatch_or_reroute()
-                    && (!before.has_any_mismatch_or_reroute()
-                        || before.provider_model != after.provider_model),
+                notify: after.has_new_alert_since(&before),
             },
         };
         Ok((change, after))
@@ -87,7 +85,7 @@ impl Database {
         let predicate = match filter {
             "runtime" => "type='Runtime'",
             "probes" => "type='Probe'",
-            "mismatches" => "type='Runtime' AND ((provider_model IS NOT NULL AND selected_model IS NOT NULL AND provider_model != selected_model) OR (provider_model IS NOT NULL AND selected_model IS NULL AND (json_extract(details,'$.provider_evidence')='model/rerouted' OR evidence='model/rerouted')) OR (selected_model IS NOT NULL AND runtime_model IS NOT NULL AND selected_model != runtime_model) OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort))",
+            "mismatches" => "type='Runtime' AND (((provider_model IS NOT NULL AND selected_model IS NOT NULL AND provider_model != selected_model) AND (evidence='turn_context' OR evidence LIKE 'turn_context + %' OR CASE WHEN json_valid(details) THEN json_extract(details,'$.runtime_evidence') END='turn_context')) OR (provider_model IS NOT NULL AND (evidence='model/rerouted' OR evidence LIKE '% + model/rerouted' OR CASE WHEN json_valid(details) THEN json_extract(details,'$.provider_evidence') END='model/rerouted' OR CASE WHEN json_valid(details) THEN json_extract(details,'$.provider_rerouted') END=1)) OR (selected_model IS NOT NULL AND runtime_model IS NOT NULL AND selected_model != runtime_model) OR (selected_effort IS NOT NULL AND runtime_effort IS NOT NULL AND selected_effort != runtime_effort))",
             _ => "1=1",
         };
         let sql = format!("SELECT id,time,type,session_id,turn_id,selected_model,selected_effort,runtime_model,runtime_effort,provider_model,evidence,details FROM observations WHERE {predicate} ORDER BY time DESC,id DESC LIMIT ? OFFSET ?");
@@ -138,6 +136,16 @@ fn merge_observations(existing: &Observation, incoming: &Observation) -> Observa
     if let Some(incoming_details) = incoming.details.as_deref().and_then(|value| {
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value).ok()
     }) {
+        let provider_update = incoming_details
+            .get("provider_evidence")
+            .is_some_and(|value| !value.is_null());
+        let provider_reason_missing = match incoming_details.get("provider_reason") {
+            Some(value) => value.is_null(),
+            None => true,
+        };
+        if provider_update && provider_reason_missing {
+            details.remove("provider_reason");
+        }
         for (key, value) in incoming_details {
             if !value.is_null() {
                 details.insert(key, value);

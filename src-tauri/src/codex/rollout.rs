@@ -164,8 +164,10 @@ impl Correlator {
             "parent_thread": e.parent_thread.clone().or_else(|| self.sessions.get(scope).and_then(|x| x.1.clone())),
             "subagent": e.is_subagent || self.sessions.get(scope).is_some_and(|x| x.2),
             "runtime_evidence": is_runtime.then_some(e.source.clone()),
-            "provider_reason": e.provider_reason,
+            "provider_reason": e.provider_reason.clone(),
+            "provider_reroute_reason": if e.source == "model/rerouted" { e.provider_reason.clone() } else { None },
             "provider_evidence": e.provider_model.as_ref().map(|_| e.source.clone()),
+            "provider_rerouted": (e.source == "model/rerouted").then_some(true),
         });
         Some(Observation {
             id: None,

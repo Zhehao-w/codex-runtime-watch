@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
     sync::Mutex,
+    time::Duration,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
@@ -196,10 +197,20 @@ fn scan_path(
     corr: &mut Correlator,
     handle: &tauri::AppHandle,
     notify: bool,
-) {
-    let observations = scan_file_observations(db, path, corr).unwrap_or_default();
+) -> Result<(), String> {
+    let observations = match scan_file_observations(db, path, corr) {
+        Ok(observations) => observations,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(())
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     if observations.is_empty() {
-        return;
+        return Ok(());
     }
     let _ = handle.emit("runtime-watch-update", ());
     if notify {
@@ -222,6 +233,7 @@ fn scan_path(
                 .show();
         }
     }
+    Ok(())
 }
 fn show_main(app: &tauri::AppHandle, verify: bool) {
     if let Some(window) = app.get_webview_window("main") {
@@ -285,24 +297,52 @@ fn main() {
             std::thread::spawn(move || {
                 let db = match Database::open(&db_path) {
                     Ok(x) => x,
-                    Err(_) => return,
+                    Err(_) => {
+                        if let Ok(mut status) = thread_status.lock() {
+                            *status = "Watcher error".into();
+                        }
+                        let _ = handle.emit("runtime-watch-update", ());
+                        return;
+                    }
                 };
                 let mut corr = Correlator::default();
                 let mut watcher: Option<notify::RecommendedWatcher> = None;
                 let mut notify_enabled = notify_mismatch;
-                while let Ok(command) = command_rx.recv() {
+                let mut pending_config: Option<(PathBuf, u32, bool)> = None;
+                loop {
+                    let command = match command_rx.recv_timeout(Duration::from_secs(5)) {
+                        Ok(command) => command,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            let Some((home, days, notifications)) = pending_config.clone() else {
+                                continue;
+                            };
+                            if !home.join("sessions").is_dir() {
+                                continue;
+                            }
+                            WatchCommand::Configure(home, days, notifications)
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
                     match command {
                         WatchCommand::Configure(home, days, notifications) => {
                             notify_enabled = notifications;
+                            pending_config = None;
                             drop(watcher.take());
                             let sessions = home.join("sessions");
                             if !sessions.is_dir() {
-                                if let Ok(mut status) = thread_status.lock() {
-                                    *status = "Codex sessions folder not found".into();
+                                pending_config = Some((home.clone(), days, notifications));
+                                let status = if home.is_dir() {
+                                    "Waiting for Codex sessions folder"
+                                } else {
+                                    "Waiting for Codex home folder"
+                                };
+                                if let Ok(mut current) = thread_status.lock() {
+                                    *current = status.into();
                                 }
                                 let _ = handle.emit("runtime-watch-update", ());
                                 continue;
                             }
+                            let mut scan_warning = false;
                             for entry in walkdir::WalkDir::new(&sessions)
                                 .into_iter()
                                 .filter_map(Result::ok)
@@ -316,7 +356,10 @@ fn main() {
                                         .unwrap_or(false)
                                 })
                             {
-                                scan_path(&db, entry.path(), &mut corr, &handle, false);
+                                if scan_path(&db, entry.path(), &mut corr, &handle, false).is_err()
+                                {
+                                    scan_warning = true;
+                                }
                             }
                             let tx = watcher_tx.clone();
                             watcher = notify::recommended_watcher(
@@ -332,7 +375,11 @@ fn main() {
                             if let Some(w) = watcher.as_mut() {
                                 let status = if w.watch(&sessions, RecursiveMode::Recursive).is_ok()
                                 {
-                                    "Watching"
+                                    if scan_warning {
+                                        "Watcher warning"
+                                    } else {
+                                        "Watching"
+                                    }
                                 } else {
                                     "Watcher error"
                                 };
@@ -346,8 +393,14 @@ fn main() {
                             }
                         }
                         WatchCommand::Path(path) => {
-                            if rollout(&path) {
-                                scan_path(&db, &path, &mut corr, &handle, notify_enabled);
+                            if rollout(&path)
+                                && scan_path(&db, &path, &mut corr, &handle, notify_enabled)
+                                    .is_err()
+                            {
+                                if let Ok(mut status) = thread_status.lock() {
+                                    *status = "Watcher warning".into();
+                                }
+                                let _ = handle.emit("runtime-watch-update", ());
                             }
                         }
                     }
