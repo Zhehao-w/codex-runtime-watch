@@ -195,3 +195,46 @@ fn provider_match_does_not_repeat_existing_runtime_mismatch_alert() {
         "Provider match · Runtime model mismatch"
     );
 }
+
+#[test]
+fn reroute_alerts_when_newly_observed_after_provider_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("reroute-transition.db")).unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let mut file = std::fs::File::create(&path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"session_meta","payload":{"id":"thread"}})
+    )
+    .unwrap();
+    writeln!(file, "{}", json!({"type":"turn_context","payload":{"turn_id":"turn","model":"selected","effort":"high","collaboration_mode":{"settings":{"model":"selected","reasoning_effort":"high"}}}})).unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"server_model","thread_id":"thread","turn_id":"turn","model":"served"})
+    )
+    .unwrap();
+
+    let mut correlator = Correlator::default();
+    let initial = scan_file_observations(&db, &path, &mut correlator).unwrap();
+    assert!(initial.iter().any(|change| change.notify));
+    let before = db.history("runtime", 1, 0).unwrap().remove(0);
+    assert!(before.provider_model_mismatch_authoritative());
+    assert!(!before.provider_was_rerouted());
+
+    let reroute = json!({"method":"model/rerouted","params":{"threadId":"thread","turnId":"turn","fromModel":"selected","toModel":"served","reason":"capacity"}});
+    writeln!(file, "{reroute}").unwrap();
+    let changed = scan_file_observations(&db, &path, &mut correlator).unwrap();
+    assert_eq!(changed.len(), 1);
+    assert!(changed[0].notify);
+    assert!(changed[0].observation.provider_was_rerouted());
+    assert!(changed[0]
+        .observation
+        .provider_model_mismatch_authoritative());
+
+    writeln!(file, "{reroute}").unwrap();
+    assert!(scan_file_observations(&db, &path, &mut correlator)
+        .unwrap()
+        .is_empty());
+}
