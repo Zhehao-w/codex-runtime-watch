@@ -1,6 +1,6 @@
 use crate::Observation;
 use chrono::Utc;
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, header::HeaderMap};
 use serde_json::Value;
 use std::{
     fs,
@@ -60,6 +60,17 @@ fn header_model(headers: &Value) -> Option<String> {
             None
         }
     })
+}
+
+fn http_header_model(headers: &HeaderMap) -> Option<(String, String)> {
+    [("openai-model", "http OpenAI-Model"), ("x-openai-model", "http X-OpenAI-Model")]
+        .into_iter()
+        .find_map(|(name, source)| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(|model| (model.to_owned(), source.to_owned()))
+        })
 }
 
 fn parse_data(data: &str) -> Option<ParsedFrame> {
@@ -284,11 +295,7 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
         .get("x-codex-safety-buffering-enabled")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let http_model = response
-        .headers()
-        .get("openai-model")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let http_model = http_header_model(response.headers());
     let parsed = match parse_sse_reader(&mut response, MAX_SSE_BYTES) {
         Ok(parsed) => parsed,
         Err(message) => return failed(model, effort, "protocol", message),
@@ -296,12 +303,8 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
 
     let (provider, response_id, provider_evidence) = if parsed.explicit {
         (parsed.model, parsed.response_id, parsed.source)
-    } else if let Some(provider) = http_model {
-        (
-            Some(provider),
-            parsed.response_id,
-            Some("http OpenAI-Model".to_owned()),
-        )
+    } else if let Some((provider, source)) = http_model {
+        (Some(provider), parsed.response_id, Some(source))
     } else {
         (parsed.model, parsed.response_id, parsed.source)
     };
@@ -324,4 +327,26 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
             "provider_evidence":provider_evidence
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_header_model;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn accepts_both_http_provider_header_names() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-openai-model", HeaderValue::from_static("model-alias"));
+        assert_eq!(
+            http_header_model(&headers),
+            Some(("model-alias".into(), "http X-OpenAI-Model".into()))
+        );
+
+        headers.insert("openai-model", HeaderValue::from_static("model-primary"));
+        assert_eq!(
+            http_header_model(&headers),
+            Some(("model-primary".into(), "http OpenAI-Model".into()))
+        );
+    }
 }
