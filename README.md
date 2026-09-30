@@ -1,14 +1,72 @@
-# Codex Runtime Watch
+<p align="center">
+  <img src="src-tauri/icon-source.svg" width="156" alt="Codex Runtime Watch icon">
+</p>
 
-Codex Runtime Watch is a lightweight local desktop utility that records the model and reasoning
-effort Codex selects, runs, and—when explicitly exposed—reports from the provider. It watches normal
-Codex activity without generating extra requests and presents a compact current-turn view and
-filterable local history.
+<h1 align="center">Codex Runtime Watch</h1>
 
-> If provider identity is not exposed by Codex, the application reports **Not observed** instead of
-> guessing.
+<p align="center">
+  A lightweight local desktop monitor for Codex model, reasoning-effort, and provider-routing evidence.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Zhehao-w/codex-runtime-watch/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Zhehao-w/codex-runtime-watch?display_name=tag&sort=semver&style=flat-square"></a>
+  <a href="https://github.com/Zhehao-w/codex-runtime-watch/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Zhehao-w/codex-runtime-watch/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Zhehao-w/codex-runtime-watch?style=flat-square"></a>
+  <img alt="Windows 11 x64" src="https://img.shields.io/badge/Windows_11-x64-0078D4?style=flat-square&logo=windows11&logoColor=white">
+  <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple_Silicon-111827?style=flat-square&logo=apple&logoColor=white">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Zhehao-w/codex-runtime-watch/releases/latest"><strong>Download the latest release →</strong></a>
+</p>
+
+---
+
+Codex Runtime Watch records the model and reasoning effort Codex selects, runs, and—when explicitly
+exposed—reports from the provider. Normal monitoring stays local and passive: it watches Codex activity
+without generating extra requests, then presents a compact current-turn view and filterable local history.
+
+> **Provider is evidence-only.** If Codex does not expose provider identity, the application reports
+> **Not observed** instead of guessing or copying Runtime into Provider.
 
 Version 0.1.0 supports **Windows 11 x64** and **macOS Apple Silicon**.
+
+## Highlights
+
+- **Selected / Runtime / Provider stay separate.** Runtime is local execution configuration; Provider
+  only appears when explicit server/provider evidence exists.
+- **Passive by default.** Normal watching is local, incremental, event-driven, and creates no extra
+  OpenAI requests.
+- **Manual Verify is explicit.** It runs only after a click, sends literal `hi`, and records a separate
+  Probe observation.
+- **Mismatch and reroute history.** SQLite-backed history keeps factual state transitions, supports
+  filtering, and avoids duplicate notifications.
+- **Small native desktop footprint.** Tauri 2 + Rust + vanilla TypeScript, with Windows tray/macOS
+  menu-bar behavior, themes, notifications, and start-at-login support.
+- **No telemetry.** No analytics SDK, remote database, localhost server, prompt capture, or response
+  capture.
+
+## Install
+
+Download the current build from the [latest GitHub Release](https://github.com/Zhehao-w/codex-runtime-watch/releases/latest).
+
+| Platform | Package |
+|---|---|
+| Windows 11 x64 | NSIS `.exe` or MSI `.msi` |
+| macOS Apple Silicon | `.dmg` |
+
+Unsigned builds may trigger Windows SmartScreen. macOS distribution outside local development needs
+an Apple Developer ID, hardened runtime signing, notarization, and stapling; CI intentionally does
+not require those secrets. Windows production distribution similarly benefits from a trusted
+code-signing certificate. macOS Intel and Linux packages are not produced.
+
+To build locally on a supported target platform:
+
+```sh
+npm ci
+npm run generate-icons
+npm run tauri build -- --features desktop
+```
 
 ## Evidence model
 
@@ -64,22 +122,7 @@ identifiers; it does not store prompts, responses, conversation text, source cod
 credentials. Manual Verify is the only feature that creates traffic. Authentication is read and
 used only inside Rust for that request; tokens are never returned to the UI, logged, or persisted.
 
-## Install and run
-
-Download an artifact from a tagged release, or build on the target platform:
-
-```sh
-npm ci
-npm run generate-icons
-npm run tauri build -- --features desktop
-```
-
-Unsigned builds may trigger Windows SmartScreen. macOS distribution outside local development needs
-an Apple Developer ID, hardened runtime signing, notarization, and stapling; CI intentionally does
-not require those secrets. Windows production distribution similarly benefits from a trusted
-code-signing certificate. macOS Intel and Linux packages are not produced.
-
-For development:
+## Development
 
 ```sh
 npm ci
