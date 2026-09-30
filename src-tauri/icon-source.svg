@@ -1,8 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
   <title id="title">Codex Runtime Watch</title>
-  <desc id="description">A monitor pulse inside a rounded dark square</desc>
-  <rect width="512" height="512" rx="112" fill="#111827"/>
-  <circle cx="256" cy="256" r="156" fill="none" stroke="#334155" stroke-width="32"/>
-  <path d="M88 270h92l34-88 67 168 42-104 21 24h80" fill="none" stroke="#5eead4" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="256" cy="256" r="18" fill="#f8fafc"/>
+  <desc id="description">A circular cyan runtime radar with an AI-knot motif on a transparent background</desc>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="256" cy="256" r="238" stroke="#38bdf8" stroke-width="14"/>
+    <circle cx="256" cy="256" r="211" stroke="#22d3ee" stroke-width="7"/>
+    <circle cx="256" cy="256" r="181" stroke="#7dd3fc" stroke-width="5" stroke-dasharray="3 13"/>
+
+    <g stroke-width="28">
+      <ellipse cx="256" cy="256" rx="82" ry="150" stroke="#67e8f9"/>
+      <ellipse cx="256" cy="256" rx="82" ry="150" stroke="#38bdf8" transform="rotate(60 256 256)"/>
+      <ellipse cx="256" cy="256" rx="82" ry="150" stroke="#7dd3fc" transform="rotate(120 256 256)"/>
+    </g>
+
+    <circle cx="256" cy="256" r="83" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="9"/>
+    <circle cx="256" cy="256" r="58" fill="#f0fdfa" stroke="#22d3ee" stroke-width="8"/>
+    <circle cx="256" cy="256" r="23" fill="#2dd4bf" stroke="none"/>
+
+    <path d="M256 256 L344 186 A112 112 0 0 1 362 218 Z" fill="#a5f3fc" stroke="none" opacity=".95"/>
+
+    <g stroke="#67e8f9" stroke-width="8">
+      <path d="M256 157v22"/>
+      <path d="M256 333v22"/>
+      <path d="M157 256h22"/>
+      <path d="M333 256h22"/>
+    </g>
+
+    <g fill="#2dd4bf" stroke="#ecfeff" stroke-width="4">
+      <circle cx="132" cy="105" r="22"/>
+      <circle cx="393" cy="123" r="17" fill="#38bdf8"/>
+      <circle cx="423" cy="318" r="20"/>
+      <circle cx="344" cy="420" r="13" fill="#38bdf8"/>
+      <circle cx="122" cy="383" r="23" fill="#38bdf8"/>
+      <circle cx="82" cy="238" r="13"/>
+    </g>
+  </g>
 </svg>
