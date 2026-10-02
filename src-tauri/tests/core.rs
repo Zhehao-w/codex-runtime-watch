@@ -151,7 +151,7 @@ fn provider_accepts_current_envelope_not_unstructured_text() {
 
 #[test]
 fn realistic_probe_sse_is_structured() {
-    let body="event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-provider\"}}\n\ndata: [DONE]\n";
+    let body="event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"logical-model\",\"headers\":{\"OpenAI-Model\":\"gpt-provider\"}}}\n\ndata: [DONE]\n";
     let parsed = parse_sse(body);
     assert_eq!(parsed.model.as_deref(), Some("gpt-provider"));
     assert_eq!(
@@ -300,7 +300,7 @@ fn probe_normalization_matches_sent_facts_and_stream_is_bounded() {
         normalize_request("m", " future-effort ").unwrap().1,
         "future-effort"
     );
-    let body = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"model: fake\"}\n\nevent: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"id\",\"model\":\"real\"}}\n\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"later\"}}\n\n";
+    let body = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"model: fake\"}\n\nevent: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"id\",\"model\":\"logical-model\",\"headers\":{\"OpenAI-Model\":\"real\"}}}\n\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"later\"}}\n\n";
     let parsed = parse_sse_reader(body.as_bytes(), 4096).unwrap();
     assert_eq!(parsed.model.as_deref(), Some("real"));
     assert!(parse_sse_reader("data: ignored forever\n".repeat(100).as_bytes(), 10).is_err());
