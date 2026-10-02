@@ -104,10 +104,11 @@ future values Codex Runtime Watch has never seen.
   Selected fallback is not announced as a provider mismatch; notification decisions use factual state
   transitions so later evidence does not repeat an already-reported mismatch.
 * Manual **Verify Backend**, which sends exactly `hi` to the Codex Responses backend only after a
-  click using the existing Codex login. Explicit `OpenAI-Model` evidence from the HTTP response or
-  structured SSE metadata takes precedence over `response.created.response.model`; the latter is kept
-  only as a bounded fallback. Verify records a separate Probe row and classifies auth, network,
-  capacity, and protocol failures without calling them mismatches.
+  click using the existing Codex login. Provider is populated only from explicit `OpenAI-Model` or
+  `X-OpenAI-Model` evidence in the HTTP response or structured SSE metadata. Generic response `model`
+  fields are intentionally ignored; if explicit provider evidence is absent, Verify records a protocol
+  failure instead of guessing. Probe rows still classify auth, network, capacity, and protocol failures
+  without calling them mismatches.
 
 Codex currently exposes `model/rerouted` through its app-server notification protocol, which this
 application does not actively connect to or subscribe to. Normal Provider is populated only when
