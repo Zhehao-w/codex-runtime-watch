@@ -23,7 +23,6 @@ pub struct ProbeEvidence {
 #[derive(Debug, Default)]
 struct ParsedFrame {
     explicit_model: Option<(String, String)>,
-    fallback_model: Option<(String, String)>,
     response_id: Option<String>,
     terminal: bool,
 }
@@ -102,23 +101,8 @@ fn parse_data(data: &str) -> Option<ParsedFrame> {
                 .map(|model| (model, "sse headers OpenAI-Model".to_owned()))
         });
 
-    let fallback_model = if kind == Some("response.created") {
-        response
-            .and_then(|response| response.get("model"))
-            .and_then(Value::as_str)
-            .map(|model| {
-                (
-                    model.to_owned(),
-                    "response.created.response.model".to_owned(),
-                )
-            })
-    } else {
-        None
-    };
-
     Some(ParsedFrame {
         explicit_model,
-        fallback_model,
         response_id,
         terminal: kind == Some("response.completed"),
     })
@@ -135,18 +119,14 @@ fn apply_frame(data: &str, evidence: &mut ProbeEvidence) -> bool {
         evidence.model = Some(model);
         evidence.source = Some(source);
         evidence.explicit = true;
-    } else if !evidence.explicit && evidence.model.is_none() {
-        if let Some((model, source)) = frame.fallback_model {
-            evidence.model = Some(model);
-            evidence.source = Some(source);
-        }
     }
     frame.terminal
 }
 
-/// Reads framed SSE incrementally. The latest explicit `OpenAI-Model` metadata
-/// is authoritative within the bounded stream. `response.created.response.model`
-/// is retained only as a fallback when no explicit server-model metadata appears.
+/// Reads framed SSE incrementally. The latest explicit `OpenAI-Model`
+/// metadata is authoritative within the bounded stream. Generic response
+/// `model` fields are intentionally ignored because they do not prove which
+/// provider model served the request.
 pub fn parse_sse_reader(reader: impl Read, maximum: u64) -> Result<ProbeEvidence, &'static str> {
     let mut reader = BufReader::new(reader.take(maximum + 1));
     let mut consumed = 0_u64;
@@ -309,14 +289,14 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
     } else if let Some((provider, source)) = http_model {
         (Some(provider), parsed.response_id, Some(source))
     } else {
-        (parsed.model, parsed.response_id, parsed.source)
+        (None, parsed.response_id, None)
     };
     let Some(provider) = provider else {
         return failed(
             model,
             effort,
             "protocol",
-            "No explicit provider model in OpenAI-Model metadata or response.created",
+            "No explicit provider model in OpenAI-Model metadata",
         );
     };
     observation(
@@ -334,7 +314,7 @@ pub fn run(codex_home: &Path, model: String, effort: String) -> Observation {
 
 #[cfg(test)]
 mod tests {
-    use super::http_header_model;
+    use super::{http_header_model, parse_sse};
     use reqwest::header::{HeaderMap, HeaderValue};
 
     #[test]
@@ -351,5 +331,29 @@ mod tests {
             http_header_model(&headers),
             Some(("model-primary".into(), "http OpenAI-Model".into()))
         );
+    }
+
+    #[test]
+    fn ignores_response_model_without_explicit_provider_metadata() {
+        let evidence = parse_sse(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\",\"model\":\"logical-model\"}}\n\n",
+        );
+        assert_eq!(evidence.response_id.as_deref(), Some("resp-1"));
+        assert_eq!(evidence.model, None);
+        assert_eq!(evidence.source, None);
+        assert!(!evidence.explicit);
+    }
+
+    #[test]
+    fn accepts_structured_sse_provider_metadata_and_prefers_latest_explicit_model() {
+        let evidence = parse_sse(concat!(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\",\"model\":\"logical-model\",\"headers\":{\"X-OpenAI-Model\":\"served-a\"}}}\n\n",
+            "data: {\"type\":\"response.metadata\",\"headers\":{\"OpenAI-Model\":\"served-b\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+        ));
+        assert_eq!(evidence.response_id.as_deref(), Some("resp-1"));
+        assert_eq!(evidence.model.as_deref(), Some("served-b"));
+        assert_eq!(evidence.source.as_deref(), Some("sse headers OpenAI-Model"));
+        assert!(evidence.explicit);
     }
 }
