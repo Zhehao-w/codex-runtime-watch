@@ -153,8 +153,8 @@ openssl base64 -A -in /path/to/developer-id-application.p12 -out certificate-bas
 ```
 
 The release runner imports the certificate into a temporary keychain, derives the Developer ID signing
-identity, builds with Tauri notarization enabled, then verifies the app signature and stapled tickets
-before uploading the DMG. The temporary keychain password is generated on the runner and is not a
+identity, builds with Tauri notarization enabled, then verifies the app signature, Gatekeeper
+assessment, and stapled app ticket before uploading the DMG. The temporary keychain password is generated on the runner and is not a
 repository secret. Never commit Apple credentials to the repository.
 
 ## Storage and settings
