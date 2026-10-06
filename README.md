@@ -55,10 +55,10 @@ Download the current build from the [latest GitHub Release](https://github.com/Z
 | Windows 11 x64 | NSIS `.exe` or MSI `.msi` |
 | macOS Apple Silicon | `.dmg` |
 
-Unsigned builds may trigger Windows SmartScreen. macOS distribution outside local development needs
-an Apple Developer ID, hardened runtime signing, notarization, and stapling; CI intentionally does
-not require those secrets. Windows production distribution similarly benefits from a trusted
-code-signing certificate. macOS Intel and Linux packages are not produced.
+Windows builds are currently unsigned and may trigger SmartScreen. Tagged macOS releases are built
+with Developer ID signing, hardened runtime, notarization, and stapling; ordinary PR/main CI remains
+unsigned and does not require Apple credentials. Windows production distribution similarly benefits
+from a trusted code-signing certificate. macOS Intel and Linux packages are not produced.
 
 To build locally on a supported target platform:
 
@@ -135,6 +135,27 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 npm run typecheck
 npm run build
 ```
+
+### macOS release signing
+
+The tag-only release workflow requires these GitHub Actions secrets:
+
+- `APPLE_CERTIFICATE`: base64-encoded Developer ID Application `.p12`
+- `APPLE_CERTIFICATE_PASSWORD`: password used when exporting that `.p12`
+- `APPLE_ID`: Apple account email used for notarization
+- `APPLE_PASSWORD`: app-specific password for that Apple account
+- `APPLE_TEAM_ID`: Apple Developer Team ID
+
+Create the certificate secret with:
+
+```sh
+openssl base64 -A -in /path/to/developer-id-application.p12 -out certificate-base64.txt
+```
+
+The release runner imports the certificate into a temporary keychain, derives the Developer ID signing
+identity, builds with Tauri notarization enabled, then verifies the app signature, Gatekeeper
+assessment, and stapled app ticket before uploading the DMG. The temporary keychain password is
+generated on the runner and is not a repository secret. Never commit Apple credentials to the repository.
 
 ## Storage and settings
 
