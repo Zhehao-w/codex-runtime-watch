@@ -119,7 +119,8 @@ pub fn install(app_dir: &Path) -> Result<(), String> {
     let plist_b64 = STANDARD.encode(plist(&marker));
     let service = format!("system/{LABEL}");
     let command = format!(
-        "/bin/launchctl bootout {} >/dev/null 2>&1 || true; \
+        "set -e; /bin/mkdir -p /Library/PrivilegedHelperTools /Library/LaunchDaemons; \
+         /bin/launchctl bootout {} >/dev/null 2>&1 || true; \
          /usr/bin/printf %s {} | /usr/bin/base64 -D > {}; \
          /usr/sbin/chown root:wheel {}; /bin/chmod 0755 {}; \
          /usr/bin/printf %s {} | /usr/bin/base64 -D > {}; \
