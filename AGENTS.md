@@ -20,8 +20,8 @@ minimal CLI request only after validating the ChatGPT account, real limits, and
 weekly safety threshold. Never automatically spend banked resets or API key credit.
 Authentication must remain in Rust; never log or expose tokens.
 
-The optional macOS Wake Manager is privileged **only** for fixed, owned pmset wake
-events. Its administrator-approved root script must remain root-owned, static, and
+The optional macOS Wake Manager is privileged **only** for its own fixed
+fallback and bounded server-reset pmset wake events. Its administrator-approved root script must remain root-owned, static, and
 incapable of evaluating user-supplied code or reading Codex credentials. Never
 overwrite other pmset schedules. Install and uninstall only after an explicit user
 action; no global sudoers rules or permanent sleep-setting modifications.
