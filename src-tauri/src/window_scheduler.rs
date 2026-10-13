@@ -527,4 +527,3 @@ mod tests {
         assert_eq!(report.action, "disabled");
     }
 }
-
