@@ -412,7 +412,11 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     if !dry_run {
         if let Err(error) = publish_next_reset(
             app_dir,
-            if limits.weekly_used >= 95.0 { 0 } else { limits.primary_reset },
+            if limits.weekly_used >= 95.0 {
+                0
+            } else {
+                limits.primary_reset
+            },
             now.timestamp(),
         ) {
             return SchedulerReport::new("wake-update-failed", error);
@@ -463,8 +467,14 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     });
     match result {
         Ok(after) => {
-            if let Err(error) = publish_next_reset(app_dir, after.primary_reset, Utc::now().timestamp()) {
-                let _ = save_attempt(app_dir, "started", "Window started; dynamic wake update failed");
+            if let Err(error) =
+                publish_next_reset(app_dir, after.primary_reset, Utc::now().timestamp())
+            {
+                let _ = save_attempt(
+                    app_dir,
+                    "started",
+                    "Window started; dynamic wake update failed",
+                );
                 let mut report = SchedulerReport::new("started-wake-warning", error);
                 after.attach(&mut report);
                 return report;
