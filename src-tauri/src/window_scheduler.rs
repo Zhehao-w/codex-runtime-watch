@@ -73,7 +73,11 @@ impl Limits {
         {
             return Err("Invalid usage percentages".into());
         }
-        Ok(Self { primary_reset, primary_used, weekly_used })
+        Ok(Self {
+            primary_reset,
+            primary_used,
+            weekly_used,
+        })
     }
 
     fn attach(&self, report: &mut SchedulerReport) {
@@ -87,20 +91,29 @@ fn cli_path() -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
         for name in ["ChatGPT.app", "Codex.app"] {
-            candidates.push(home.join("Applications").join(name).join("Contents/Resources/codex-cli/bin/codex"));
+            candidates.push(
+                home.join("Applications")
+                    .join(name)
+                    .join("Contents/Resources/codex-cli/bin/codex"),
+            );
         }
     }
     for name in ["ChatGPT.app", "Codex.app"] {
-        candidates.push(Path::new("/Applications").join(name).join("Contents/Resources/codex-cli/bin/codex"));
+        candidates.push(
+            Path::new("/Applications")
+                .join(name)
+                .join("Contents/Resources/codex-cli/bin/codex"),
+        );
     }
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             candidates.push(dir.join("codex"));
         }
     }
-    candidates.into_iter().find(|path| path.is_file()).ok_or_else(|| {
-        "Codex CLI not found (checked Desktop bundled CLI and PATH)".into()
-    })
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "Codex CLI not found (checked Desktop bundled CLI and PATH)".into())
 }
 
 fn ensure_chatgpt_auth() -> Result<(), String> {
@@ -143,7 +156,9 @@ fn read_limits(cli: &Path) -> Result<Limits, String> {
             match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    if line.len() > 256 * 1024 { break; }
+                    if line.len() > 256 * 1024 {
+                        break;
+                    }
                     if let Ok(value) = serde_json::from_str::<Value>(&line) {
                         if value.get("id").and_then(Value::as_i64) == Some(2) {
                             let _ = tx.send(value);
@@ -159,7 +174,10 @@ fn read_limits(cli: &Path) -> Result<Limits, String> {
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{\"excludeResetCreditDetails\":true}}\n"
     );
-    if let Err(e) = stdin.write_all(request.as_bytes()).and_then(|_| stdin.flush()) {
+    if let Err(e) = stdin
+        .write_all(request.as_bytes())
+        .and_then(|_| stdin.flush())
+    {
         stop_child(&mut child);
         return Err(format!("app-server request failed: {e}"));
     }
@@ -183,8 +201,7 @@ fn allowed_time(now: DateTime<Local>, reset: i64) -> bool {
         .into_iter()
         .any(|anchor| minute >= anchor && minute <= anchor + 30);
     // Follow real (possibly delayed) reset times, without replaying old slots.
-    let just_reset = reset > 0 && now.timestamp() >= reset
-        && now.timestamp() - reset <= 15 * 60;
+    let just_reset = reset > 0 && now.timestamp() >= reset && now.timestamp() - reset <= 15 * 60;
     in_anchor || just_reset
 }
 
@@ -207,14 +224,18 @@ fn save_attempt(app_dir: &Path, action: &str, detail: &str) -> Result<(), String
     let bytes = serde_json::to_vec(&json!({
         "attempt": Utc::now().timestamp(),
         "action": action, "detail": detail
-    })).map_err(|e| e.to_string())?;
-    fs::write(&tmp, bytes).and_then(|_| fs::rename(tmp, path))
+    }))
+    .map_err(|e| e.to_string())?;
+    fs::write(&tmp, bytes)
+        .and_then(|_| fs::rename(tmp, path))
         .map_err(|e| format!("Cannot save scheduler state: {e}"))
 }
 
 struct TickLock(PathBuf);
 impl Drop for TickLock {
-    fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 fn acquire_lock(app_dir: &Path) -> Result<Option<TickLock>, String> {
     fs::create_dir_all(app_dir).map_err(|e| e.to_string())?;
@@ -227,7 +248,8 @@ fn acquire_lock(app_dir: &Path) -> Result<Option<TickLock>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // A crashed process may leave a lock. Never race another live tick:
             // only reclaim it after 10 minutes, longer than the RPC timeout.
-            let stale = fs::metadata(&path).and_then(|m| m.modified())
+            let stale = fs::metadata(&path)
+                .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.elapsed().ok())
                 .is_some_and(|age| age > Duration::from_secs(600));
@@ -242,10 +264,21 @@ fn acquire_lock(app_dir: &Path) -> Result<Option<TickLock>, String> {
 
 fn ping(cli: &Path, model: &str) -> Result<(), String> {
     let mut child = Command::new(cli)
-        .args(["exec", "--ephemeral", "--ignore-user-config",
-            "--ignore-rules", "--skip-git-repo-check", "-s", "read-only",
-            "-m", model, "-c", "model_reasoning_effort=low", "--json",
-            "Reply with exactly OK. Do not use tools."])
+        .args([
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "-s",
+            "read-only",
+            "-m",
+            model,
+            "-c",
+            "model_reasoning_effort=low",
+            "--json",
+            "Reply with exactly OK. Do not use tools.",
+        ])
         .current_dir(std::env::temp_dir())
         .env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_API_KEY")
@@ -260,8 +293,14 @@ fn ping(cli: &Path, model: &str) -> Result<(), String> {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => return Err(format!("Codex exited with {status}")),
             Ok(None) if start.elapsed() < PING_TIMEOUT => thread::sleep(Duration::from_millis(250)),
-            Ok(None) => { stop_child(&mut child); return Err("Codex ping timed out".into()); }
-            Err(e) => { stop_child(&mut child); return Err(e.to_string()); }
+            Ok(None) => {
+                stop_child(&mut child);
+                return Err("Codex ping timed out".into());
+            }
+            Err(e) => {
+                stop_child(&mut child);
+                return Err(e.to_string());
+            }
         }
     }
 }
@@ -277,8 +316,11 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     if !dry_run && recent_attempt(app_dir, now.timestamp()) {
         return SchedulerReport::new("backoff", "An attempt occurred in the last 30 minutes");
     }
-    if !model.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
-        || model.is_empty() || model.len() > 80
+    if !model
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        || model.is_empty()
+        || model.len() > 80
     {
         return SchedulerReport::new("error", "Invalid model name");
     }
@@ -294,18 +336,26 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
         Err(error) => return SchedulerReport::new("rpc-failed", error),
     };
     let mut report = if limits.weekly_used >= 95.0 {
-        SchedulerReport::new("weekly-guard", "Weekly usage reached the 95% safety threshold")
+        SchedulerReport::new(
+            "weekly-guard",
+            "Weekly usage reached the 95% safety threshold",
+        )
     } else if limits.primary_reset > now.timestamp() {
         SchedulerReport::new("active", "Existing 5-hour window is still active")
     } else if !allowed_time(now, limits.primary_reset) {
-        SchedulerReport::new("outside-slot", "Missed the 07/12/17/22 start slot; no catch-up")
+        SchedulerReport::new(
+            "outside-slot",
+            "Missed the 07/12/17/22 start slot; no catch-up",
+        )
     } else if dry_run {
         SchedulerReport::new("would-ping", "Eligible; dry run made no model request")
     } else {
         SchedulerReport::new("pending", "Ready for minimal Codex request")
     };
     limits.attach(&mut report);
-    if report.action != "pending" { return report; }
+    if report.action != "pending" {
+        return report;
+    }
     let _lock = match acquire_lock(app_dir) {
         Ok(Some(lock)) => lock,
         Ok(None) => return SchedulerReport::new("locked", "Another scheduler tick is running"),
@@ -341,12 +391,17 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
 
 fn agent_plist_path() -> Result<PathBuf, String> {
     dirs::home_dir()
-        .map(|h| h.join("Library/LaunchAgents").join(format!("{AGENT_LABEL}.plist")))
+        .map(|h| {
+            h.join("Library/LaunchAgents")
+                .join(format!("{AGENT_LABEL}.plist"))
+        })
         .ok_or("Unable to find home directory".into())
 }
 
 fn launchctl_uid() -> Result<String, String> {
-    let output = Command::new("/usr/bin/id").arg("-u").output()
+    let output = Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
         .map_err(|e| format!("Cannot determine UID: {e}"))?;
     if !output.status.success() {
         return Err("Unable to determine launchd user domain".into());
@@ -360,8 +415,11 @@ fn launchctl_uid() -> Result<String, String> {
 }
 
 fn xml_escape(input: &str) -> String {
-    input.replace('&', "&amp;").replace('<', "&lt;")
-        .replace('>', "&gt;").replace('"', "&quot;")
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
 
@@ -372,19 +430,21 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
     let domain = format!("gui/{}", launchctl_uid()?);
     let service = format!("{domain}/{AGENT_LABEL}");
     let _ = Command::new("/bin/launchctl")
-        .args(["bootout", &service]).output();
+        .args(["bootout", &service])
+        .output();
 
     if !enabled {
         match fs::remove_file(&plist) {
-            Ok(()) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("Cannot remove scheduler LaunchAgent: {e}")),
         };
         return Ok(());
     }
     let exe = std::env::current_exe().map_err(|e| format!("Cannot locate app executable: {e}"))?;
     let exe = exe.to_string_lossy();
-    let content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+    let content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{AGENT_LABEL}</string>
@@ -393,18 +453,25 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
 <key>RunAtLoad</key><true/>
 <key>StandardOutPath</key><string>/dev/null</string>
 <key>StandardErrorPath</key><string>/dev/null</string>
-</dict></plist>"#, xml_escape(&exe));
+</dict></plist>"#,
+        xml_escape(&exe)
+    );
     if let Some(parent) = plist.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let temp = plist.with_extension("tmp");
-    fs::write(&temp, content).and_then(|_| fs::rename(temp, &plist))
+    fs::write(&temp, content)
+        .and_then(|_| fs::rename(temp, &plist))
         .map_err(|e| format!("Cannot install scheduler LaunchAgent: {e}"))?;
     let result = Command::new("/bin/launchctl")
         .args(["bootstrap", &domain, plist.to_string_lossy().as_ref()])
-        .output().map_err(|e| format!("Cannot start scheduler LaunchAgent: {e}"))?;
+        .output()
+        .map_err(|e| format!("Cannot start scheduler LaunchAgent: {e}"))?;
     if !result.status.success() {
-        return Err(format!("launchctl bootstrap failed: {}", String::from_utf8_lossy(&result.stderr)));
+        return Err(format!(
+            "launchctl bootstrap failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
     }
     Ok(())
 }
@@ -416,15 +483,30 @@ mod tests {
 
     #[test]
     fn slots_and_night_pause() {
-        let date = Local.with_ymd_and_hms(2026, 10, 13, 7, 0, 0).single().unwrap();
+        let date = Local
+            .with_ymd_and_hms(2026, 10, 13, 7, 0, 0)
+            .single()
+            .unwrap();
         assert!(allowed_time(date, 0));
-        let noon = Local.with_ymd_and_hms(2026, 10, 13, 12, 10, 0).single().unwrap();
+        let noon = Local
+            .with_ymd_and_hms(2026, 10, 13, 12, 10, 0)
+            .single()
+            .unwrap();
         assert!(allowed_time(noon, 0));
-        let late = Local.with_ymd_and_hms(2026, 10, 13, 9, 0, 0).single().unwrap();
+        let late = Local
+            .with_ymd_and_hms(2026, 10, 13, 9, 0, 0)
+            .single()
+            .unwrap();
         assert!(!allowed_time(late, 0));
-        let night = Local.with_ymd_and_hms(2026, 10, 14, 3, 0, 0).single().unwrap();
+        let night = Local
+            .with_ymd_and_hms(2026, 10, 14, 3, 0, 0)
+            .single()
+            .unwrap();
         assert!(!allowed_time(night, night.timestamp()));
-        let reset = Local.with_ymd_and_hms(2026, 10, 13, 12, 34, 0).single().unwrap();
+        let reset = Local
+            .with_ymd_and_hms(2026, 10, 13, 12, 34, 0)
+            .single()
+            .unwrap();
         assert!(allowed_time(reset, reset.timestamp()));
     }
 
@@ -432,7 +514,10 @@ mod tests {
     fn strict_rpc_state_validation() {
         let good = json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}}}});
         assert_eq!(Limits::parse(&good).unwrap().weekly_used, 50.0);
-        assert!(Limits::parse(&json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0}}}})).is_err());
+        assert!(Limits::parse(
+            &json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0}}}})
+        )
+        .is_err());
         assert!(Limits::parse(&json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0},"secondary":{"usedPercent":101}}}})).is_err());
     }
 
