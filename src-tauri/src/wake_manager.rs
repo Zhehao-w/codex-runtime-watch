@@ -51,7 +51,7 @@ pub fn status(app_dir: &Path) -> WakeStatus {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             (text.lines().filter(|line| line.contains(WAKE_OWNER) && line.contains("wake at")).count(),
-             if installed { "Wake helper installed; fixed daily wake times are 06:58, 11:58, 16:58 and 21:58" }
+             if installed { "Wake helper installed; 06:58 / 11:58 / 16:58 / 21:58 fallback wakes plus a validated server-reset wake" }
              else { "Wake helper is not installed; scheduled Codex checks cannot wake a sleeping Mac" }.to_owned())
         }
         _ => (0, "Unable to read macOS wake schedule".into()),
