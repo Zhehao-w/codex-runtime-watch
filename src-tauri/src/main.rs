@@ -179,7 +179,7 @@ fn wake_status(app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        serde_json::json!({"installed":false,"enabled":false,"owned_events":0,
+        serde_json::json!({"supported":false,"installed":false,"enabled":false,"owned_events":0,
             "detail":"Wake from Sleep is available on macOS only"})
     }
 }
