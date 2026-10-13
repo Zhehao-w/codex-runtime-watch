@@ -98,6 +98,12 @@ fn save_settings(
     state: tauri::State<State>,
     settings: Settings,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    codex_runtime_watch::window_scheduler::sync_launch_agent(settings.scheduler_enabled)?;
+    #[cfg(not(target_os = "macos"))]
+    if settings.scheduler_enabled {
+        return Err("Window Scheduler requires macOS".into());
+    }
     settings
         .save(&state.settings_path)
         .map_err(|e| e.to_string())?;
@@ -132,6 +138,26 @@ fn save_settings(
             settings.notify_mismatch,
         ))
         .map_err(|_| "watcher unavailable".to_string())
+}
+#[tauri::command]
+async fn scheduler_check(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let state = app.state::<State>();
+        let settings = Settings::load(&state.settings_path);
+        let dir = state.app_dir.clone();
+        let report = tauri::async_runtime::spawn_blocking(move || {
+            codex_runtime_watch::window_scheduler::tick(
+                settings.scheduler_enabled, &settings.scheduler_model, &dir, true
+            )
+        }).await.map_err(|e| e.to_string())?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(serde_json::json!({"action":"unavailable","detail":"Window Scheduler requires macOS"}))
+    }
 }
 #[tauri::command]
 fn delete_observation(state: tauri::State<State>, id: i64) -> Result<(), String> {
@@ -245,6 +271,17 @@ fn show_main(app: &tauri::AppHandle, verify: bool) {
     }
 }
 fn main() {
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == "--window-scheduler-tick" || arg == "--window-scheduler-dry-run") {
+        let dry_run = std::env::args().any(|arg| arg == "--window-scheduler-dry-run");
+        let app_dir = dirs::data_dir().unwrap_or_default().join("dev.codexruntimewatch.app");
+        let settings = Settings::load(&app_dir.join("settings.json"));
+        let report = codex_runtime_watch::window_scheduler::tick(
+            settings.scheduler_enabled, &settings.scheduler_model, &app_dir, dry_run,
+        );
+        println!("{}", serde_json::to_string(&report).unwrap_or_default());
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if !args.iter().any(|arg| arg == "--hidden") {
@@ -482,7 +519,8 @@ fn main() {
             delete_observation,
             clear_history,
             verify_backend,
-            open_folder
+            open_folder,
+            scheduler_check
         ])
         .run(tauri::generate_context!())
         .expect("application runtime failed")
