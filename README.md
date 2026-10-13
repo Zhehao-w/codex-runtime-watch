@@ -87,15 +87,21 @@ window for wake/network jitter, and no catch-up burst for missed windows.
 If the Mac is awake, a normal per-user `launchd` agent can check usage. For genuine
 Sleep, also enable **Wake Mac from Sleep** and click **Install / update Wake Manager…**.
 macOS then asks for **administrator approval**. The application installs one fixed,
-root-owned shell helper and one root-owned LaunchDaemon. This root helper can only
-maintain **one-shot `pmset schedule wake`** events at 06:58, 11:58, 16:58,
-21:58 local time for today/tomorrow. It does *not* execute Codex, contact OpenAI,
-read authentication files, or use any arbitrary user-supplied commands. The actual
-Codex request is always made by the separate unprivileged user LaunchAgent.
+root-owned shell helper and one root-owned LaunchDaemon. It maintains one-shot
+`pmset schedule wake` fallback events at **06:58, 11:58, 16:58 and 21:58**
+(system local time) for today/tomorrow. In addition, the unprivileged scheduler
+publishes the **actual server `resetsAt` timestamp** as plain numeric data. The
+root helper validates it (time bounds, daytime window and AC power), and schedules
+a separately owner-tagged **dynamic wake 90 seconds before that reset**. If Codex
+usage changes the reset time while the Mac is awake, the next checks replace
+the old dynamic event without touching anybody else's schedules. It does *not*
+execute Codex, contact OpenAI, read authentication files, or execute commands
+from the user-controlled timestamp. The actual Codex request is made by the
+separate unprivileged LaunchAgent.
 
-The root helper's wake events have the owner tag
-`dev.codexruntimewatch.wake-helper`; it never changes `pmset repeat` or any other
-existing event. When turned off, the helper removes only its own events on the
+Wake events use `dev.codexruntimewatch.wake-helper` for fixed fallback
+wakes and `dev.codexruntimewatch.wake-helper.dynamic` for the dynamic event.
+It never changes `pmset repeat` or any other existing event. When turned off, the helper removes only its own events on the
 next awake polling tick. **Remove Wake Manager…** also requires administrator
 approval and removes only the helper, its LaunchDaemon, and its own wake events.
 No sudoers entry, API key, or broad recurring root command permission is installed.
@@ -105,9 +111,11 @@ scheduling and the automatic Codex request stop when unplugged, except that a wa
 already scheduled while plugged in might still fire after unplugging during sleep.
 macOS can still defer or miss wakes. A successful wake does not guarantee network
 availability; the scheduler fails closed and retries only on its normal guarded ticks.
-The helper briefly holds an **idle-sleep-only** assertion around each scheduled wake
-for up to three minutes; it does not change the Mac's permanent power settings or
-prevent manual Sleep.
+The helper holds a bounded **idle-sleep-only** assertion around fixed and dynamic
+wakes for up to four minutes. Separately, the unprivileged scheduler holds an
+idle-sleep assertion for the **entire rate-limit check + Codex request + confirmation**
+and releases it on success, failure or timeout. Neither changes permanent power
+settings nor prevents user-initiated manual Sleep.
 
 **Security:** The administrator prompt is shown only after clicking an install/remove
 button. The installed helper is root-owned and installed from a fixed embedded source;
