@@ -190,6 +190,10 @@ async fn wake_install(app: tauri::AppHandle) -> Result<serde_json::Value, String
         let dir = app.state::<State>().app_dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
             codex_runtime_watch::wake_manager::install(&dir)?;
+            let settings = Settings::load(&dir.join("settings.json"));
+            codex_runtime_watch::wake_manager::set_marker(
+                &dir, settings.scheduler_enabled && settings.scheduler_wake_enabled
+            )?;
             serde_json::to_value(codex_runtime_watch::wake_manager::status(&dir))
                 .map_err(|e| e.to_string())
         }).await.map_err(|e| e.to_string())?
@@ -207,6 +211,9 @@ async fn wake_uninstall(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         let dir = app.state::<State>().app_dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
             codex_runtime_watch::wake_manager::uninstall(&dir)?;
+            let mut settings = Settings::load(&dir.join("settings.json"));
+            settings.scheduler_wake_enabled = false;
+            settings.save(&dir.join("settings.json")).map_err(|e| e.to_string())?;
             serde_json::to_value(codex_runtime_watch::wake_manager::status(&dir))
                 .map_err(|e| e.to_string())
         }).await.map_err(|e| e.to_string())?
