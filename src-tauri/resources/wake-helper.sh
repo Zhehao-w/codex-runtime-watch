@@ -7,8 +7,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 PMSET=/usr/bin/pmset
 DATE=/bin/date
 OWNER=dev.codexruntimewatch.wake-helper
-ACTION=\${1:-}
-MARKER=\${2:-}
+ACTION=${1:-}
+MARKER=${2:-}
 
 case "$ACTION" in
   run|remove|dry-run) ;;
@@ -50,7 +50,7 @@ fi
 now=$("$DATE" +%s)
 for offset in 0 1; do
   for hour in 06 11 16 21; do
-    stamp=$("$DATE" -v+"$offset"d -v"\${hour}"H -v58M -v00S "+%m/%d/%y %H:%M:%S")
+    stamp=$("$DATE" -v+"$offset"d -v"${hour}"H -v58M -v00S "+%m/%d/%y %H:%M:%S")
     epoch=$("$DATE" -j -f "%m/%d/%y %H:%M:%S" "$stamp" +%s 2>/dev/null || echo 0)
     [ "$epoch" -gt "$((now + 45))" ] || continue
     if owned_events | /usr/bin/grep -Fxq "$stamp"; then
