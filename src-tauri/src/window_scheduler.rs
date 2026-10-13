@@ -146,6 +146,56 @@ fn stop_child(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Keep the Mac from IDLE sleeping for the entire check/request lifecycle.
+/// Dropping this guard releases the assertion even after an error or timeout.
+struct IdleSleepGuard(Child);
+
+impl IdleSleepGuard {
+    fn start() -> Result<Self, String> {
+        let child = Command::new("/usr/bin/caffeinate")
+            .arg("-i")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Cannot hold macOS idle-sleep assertion: {e}"))?;
+        Ok(Self(child))
+    }
+}
+
+impl Drop for IdleSleepGuard {
+    fn drop(&mut self) {
+        stop_child(&mut self.0);
+    }
+}
+
+/// User-level code may publish ONLY a reset timestamp, never a privileged
+/// command. The root wake helper checks ownership, numerical bounds,
+/// power source, and local allowed hours independently before using it.
+fn publish_next_reset(app_dir: &Path, reset: i64, now: i64) -> Result<(), String> {
+    let path = app_dir.join("window-next-reset");
+    let local_minutes = chrono::DateTime::<Utc>::from_timestamp(reset, 0)
+        .map(|stamp| stamp.with_timezone(&Local))
+        .map(|stamp| stamp.hour() * 60 + stamp.minute());
+    let eligible = app_dir.join("window-wake-enabled").is_file()
+        && reset > now + 45
+        && reset <= now + 6 * 3600
+        && local_minutes.is_some_and(|m| (420..=1350).contains(&m));
+    if !eligible {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Cannot clear next-reset wake: {e}")),
+        }
+        return Ok(());
+    }
+    fs::create_dir_all(app_dir).map_err(|e| e.to_string())?;
+    let temp = path.with_extension("tmp");
+    fs::write(&temp, format!("{reset}\n"))
+        .and_then(|_| fs::rename(temp, path))
+        .map_err(|e| format!("Cannot publish next-reset wake: {e}"))
+}
+
 fn read_limits(cli: &Path) -> Result<Limits, String> {
     let mut child = Command::new(cli)
         .arg("app-server")
@@ -347,10 +397,23 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
         Ok(path) => path,
         Err(error) => return SchedulerReport::new("cli-missing", error),
     };
+    let _sleep_guard = if dry_run {
+        None
+    } else {
+        match IdleSleepGuard::start() {
+            Ok(guard) => Some(guard),
+            Err(error) => return SchedulerReport::new("sleep-guard-failed", error),
+        }
+    };
     let limits = match read_limits(&cli) {
         Ok(value) => value,
         Err(error) => return SchedulerReport::new("rpc-failed", error),
     };
+    if !dry_run {
+        if let Err(error) = publish_next_reset(app_dir, limits.primary_reset, now.timestamp()) {
+            return SchedulerReport::new("wake-update-failed", error);
+        }
+    }
     let mut report = if limits.weekly_used >= 95.0 {
         SchedulerReport::new(
             "weekly-guard",
@@ -396,6 +459,12 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     });
     match result {
         Ok(after) => {
+            if let Err(error) = publish_next_reset(app_dir, after.primary_reset, Utc::now().timestamp()) {
+                let _ = save_attempt(app_dir, "started", "Window started; dynamic wake update failed");
+                let mut report = SchedulerReport::new("started-wake-warning", error);
+                after.attach(&mut report);
+                return report;
+            }
             let _ = save_attempt(app_dir, "started", "New 5-hour window confirmed");
             let mut report = SchedulerReport::new("started", "New 5-hour window confirmed");
             after.attach(&mut report);
