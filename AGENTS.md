@@ -1,8 +1,7 @@
 # Codex Runtime Watch contributor guide
 
 The product scope is intentionally narrow: observe model evidence, not usage. Do not add token,
-cost, quota, account, prompt, or project dashboards unless explicitly requested. Never perform an
-automatic backend probe. Runtime is local execution evidence and **must never** be equated with
+cost, quota, account, prompt, or project dashboards unless explicitly requested. Never perform an automatic backend probe except for the separately opt-in macOS Window Scheduler; that feature must stay disabled by default, fail closed on missing account/usage data, never use API-key billing, and never alter normal passive monitoring. Runtime is local execution evidence and **must never** be equated with
 Provider; absent explicit server evidence, Provider remains `Not observed`.
 
 Keep Codex schema knowledge inside `src-tauri/src/codex/`. Model and reasoning-effort strings are
