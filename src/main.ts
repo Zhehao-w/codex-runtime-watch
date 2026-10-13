@@ -3,18 +3,18 @@ import { listen } from '@tauri-apps/api/event';
 import './style.css';
 
 type Obs={id:number,time:string,type:string,selected_model?:string,selected_effort?:string,runtime_model?:string,runtime_effort?:string,provider_model?:string,evidence:string,details?:string,result:string};
-type Settings={codex_home:string|null,notify_mismatch:boolean,start_at_login:boolean,theme:'system'|'light'|'dark',initial_scan_days:number};
-type SettingsForm={home:string,days:string,notify:boolean,login:boolean,theme:Settings['theme']};
+type Settings={codex_home:string|null,notify_mismatch:boolean,start_at_login:boolean,theme:'system'|'light'|'dark',initial_scan_days:number,scheduler_enabled:boolean,scheduler_model:string};
+type SettingsForm={home:string,days:string,notify:boolean,login:boolean,theme:Settings['theme'],schedulerEnabled:boolean,schedulerModel:string};
 type ViewName='main'|'verify'|'settings';
 const app=document.querySelector<HTMLDivElement>('#app')!;
 const value=(a?:string,b?:string)=>`${a||'Unknown'}${b?` / ${b}`:''}`;
 const esc=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-const state:{filter:string,view:ViewName,probeStatus:string,probeInFlight:boolean,verifyModel:string,verifyEffort:string,settingsDraft:Partial<SettingsForm>}={filter:'all',view:'main',probeStatus:'',probeInFlight:false,verifyModel:'',verifyEffort:'',settingsDraft:{}};
+const state:{filter:string,view:ViewName,probeStatus:string,probeInFlight:boolean,verifyModel:string,verifyEffort:string,settingsDraft:Partial<SettingsForm>,schedulerStatus:string}={filter:'all',view:'main',probeStatus:'',probeInFlight:false,verifyModel:'',verifyEffort:'',settingsDraft:{},schedulerStatus:''};
 let loading=false;
 let reloadPending=false;
 
 function settingsForm(settings:Settings):SettingsForm{
- return {home:settings.codex_home||'',days:String(settings.initial_scan_days),notify:settings.notify_mismatch,login:settings.start_at_login,theme:settings.theme};
+ return {home:settings.codex_home||'',days:String(settings.initial_scan_days),notify:settings.notify_mismatch,login:settings.start_at_login,theme:settings.theme,schedulerEnabled:settings.scheduler_enabled,schedulerModel:settings.scheduler_model};
 }
 function currentSettingsForm():SettingsForm{
  return {
@@ -22,7 +22,9 @@ function currentSettingsForm():SettingsForm{
   days:(document.querySelector('#days') as HTMLInputElement)?.value??'7',
   notify:(document.querySelector('#notify') as HTMLInputElement)?.checked??false,
   login:(document.querySelector('#login') as HTMLInputElement)?.checked??false,
-  theme:((document.querySelector('#theme') as HTMLSelectElement)?.value??'system') as Settings['theme']
+  theme:((document.querySelector('#theme') as HTMLSelectElement)?.value??'system') as Settings['theme'],
+  schedulerEnabled:(document.querySelector('#scheduler-enabled') as HTMLInputElement)?.checked??false,
+  schedulerModel:(document.querySelector('#scheduler-model') as HTMLInputElement)?.value??'gpt-5.6-luna'
  };
 }
 function setDraft<K extends keyof SettingsForm>(key:K,value:SettingsForm[K]){state.settingsDraft={...state.settingsDraft,[key]:value};}
@@ -40,7 +42,7 @@ async function load(){
   <div class="title"><h2>Recent history</h2><select id="filter"><option value="all">All</option><option value="mismatches">Mismatches</option><option value="runtime">Runtime</option><option value="probes">Probes</option></select></div>
   <div class="history">${rows.map(row).join('')||'<p class="muted">History is empty.</p>'}</div><button id="clear" class="danger">Clear history</button></main>
   <main id="verify"><h2>Verify backend</h2><p class="notice">Sends a separate minimal <code>hi</code> request to the Codex backend using your existing local login. Credentials stay in Rust and are never displayed or stored by this app.</p><label>Requested model<input id="model" required value="${esc(state.verifyModel)}"></label><label>Reasoning effort<input id="effort" placeholder="low" value="${esc(state.verifyEffort)}"></label><button id="probe" class="primary" ${state.probeInFlight?'disabled':''}>${state.probeInFlight?'Verifying…':'Verify Backend'}</button><p id="probe-status">${esc(state.probeStatus)}</p></main>
-  <main id="settings"><h2>Settings</h2><label>Codex home<input id="home" value="${esc(form.home)}" placeholder="Default ~/.codex"></label><label>Initial scan days<input id="days" type="number" min="1" max="365" value="${esc(form.days)}"></label><label class="check"><input id="notify" type="checkbox" ${form.notify?'checked':''}> Notify on mismatch</label><label class="check"><input id="login" type="checkbox" ${form.login?'checked':''}> Start at login</label><label>Theme<select id="theme"><option>system</option><option>light</option><option>dark</option></select></label><button id="save" class="primary">Save settings</button><p id="settings-status"></p><div class="folders"><button id="open-codex">Open Codex data folder</button><button id="open-app">Open app data folder</button></div><small>Version 0.1.0</small></main>`;
+  <main id="settings"><h2>Settings</h2><label>Codex home<input id="home" value="${esc(form.home)}" placeholder="Default ~/.codex"></label><label>Initial scan days<input id="days" type="number" min="1" max="365" value="${esc(form.days)}"></label><label class="check"><input id="notify" type="checkbox" ${form.notify?'checked':''}> Notify on mismatch</label><label class="check"><input id="login" type="checkbox" ${form.login?'checked':''}> Start at login</label><label>Theme<select id="theme"><option>system</option><option>light</option><option>dark</option></select></label><section class="card"><h3>5-hour Window Scheduler · macOS</h3><p class="muted">Off by default. When enabled, sends a minimal Codex request only if a 5h window has ended and weekly usage is below 95%. Checks around 07:00, 12:00, 17:00 and 22:00 local time; quiet hours overnight. This version schedules checks while Mac is awake; automatic wake from system Sleep is not yet installed.</p><label class="check"><input id="scheduler-enabled" type="checkbox" ${form.schedulerEnabled?'checked':''}> Enable automatic window starts</label><label>Low-cost model<input id="scheduler-model" value="${esc(form.schedulerModel)}" spellcheck="false"></label><button id="scheduler-check" type="button">Dry run · no model request</button><p id="scheduler-status">${esc(state.schedulerStatus)}</p></section><button id="save" class="primary">Save settings</button><p id="settings-status"></p><div class="folders"><button id="open-codex">Open Codex data folder</button><button id="open-app">Open app data folder</button></div><small>Version 0.1.0</small></main>`;
   (document.querySelector('#filter') as HTMLSelectElement).value=state.filter;
   (document.querySelector('#theme') as HTMLSelectElement).value=form.theme;
   showView();
@@ -67,9 +69,12 @@ function bind(s:Settings){
  document.querySelector('#days')?.addEventListener('input',e=>setDraft('days',(e.target as HTMLInputElement).value));
  document.querySelector('#notify')?.addEventListener('change',e=>setDraft('notify',(e.target as HTMLInputElement).checked));
  document.querySelector('#login')?.addEventListener('change',e=>setDraft('login',(e.target as HTMLInputElement).checked));
+ document.querySelector('#scheduler-enabled')?.addEventListener('change',e=>setDraft('schedulerEnabled',(e.target as HTMLInputElement).checked));
+ document.querySelector('#scheduler-model')?.addEventListener('input',e=>setDraft('schedulerModel',(e.target as HTMLInputElement).value));
+ document.querySelector('#scheduler-check')?.addEventListener('click',async()=>{state.schedulerStatus='Checking (no model request)…';await load();try{const r=await invoke<{action:string,detail:string,next_reset?:number,weekly_used_percent?:number}>('scheduler_check');state.schedulerStatus=`${r.action}: ${r.detail}${r.next_reset?' · resets '+new Date(r.next_reset*1000).toLocaleString():''}${r.weekly_used_percent==null?'':' · weekly '+r.weekly_used_percent+'%'}`;}catch(e){state.schedulerStatus='Check failed: '+String(e);}await load();});
  document.querySelector('#theme')?.addEventListener('change',e=>setDraft('theme',(e.target as HTMLSelectElement).value as Settings['theme']));
  document.querySelector('#probe')?.addEventListener('click',async()=>{if(state.probeInFlight)return;state.verifyModel=(document.querySelector('#model') as HTMLInputElement).value;state.verifyEffort=(document.querySelector('#effort') as HTMLInputElement).value;state.probeInFlight=true;state.probeStatus='Verifying…';await load();try{const r=await invoke<Obs>('verify_backend',{model:state.verifyModel,effort:state.verifyEffort});state.probeStatus=`${r.result}${r.provider_model?` · Provider ${r.provider_model}`:''}`}catch(e){state.probeStatus=`Probe failed: ${e}`}finally{state.probeInFlight=false;await load()}});
- document.querySelector('#save')?.addEventListener('click',async()=>{const status=document.querySelector('#settings-status')!;const form=currentSettingsForm();const n={...s,codex_home:form.home.trim()||null,initial_scan_days:Number(form.days),notify_mismatch:form.notify,start_at_login:form.login,theme:form.theme};try{await invoke('save_settings',{settings:n});state.settingsDraft={};await load()}catch(e){status.textContent=`Save failed: ${e}`}});
+ document.querySelector('#save')?.addEventListener('click',async()=>{const status=document.querySelector('#settings-status')!;const form=currentSettingsForm();const n={...s,codex_home:form.home.trim()||null,initial_scan_days:Number(form.days),notify_mismatch:form.notify,start_at_login:form.login,theme:form.theme,scheduler_enabled:form.schedulerEnabled,scheduler_model:form.schedulerModel.trim()};try{await invoke('save_settings',{settings:n});state.settingsDraft={};await load()}catch(e){status.textContent=`Save failed: ${e}`}});
  document.querySelector('#open-codex')?.addEventListener('click',async()=>{try{await invoke('open_folder',{kind:'codex'})}catch(e){alert(`Open failed: ${e}`)}});
  document.querySelector('#open-app')?.addEventListener('click',async()=>{try{await invoke('open_folder',{kind:'app'})}catch(e){alert(`Open failed: ${e}`)}});
 }
