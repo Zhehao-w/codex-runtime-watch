@@ -348,7 +348,10 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
             "Missed the 07/12/17/22 start slot; no catch-up",
         )
     } else if dry_run {
-        SchedulerReport::new("would-ping", "Eligible for a scheduled start; this dry run never sends requests")
+        SchedulerReport::new(
+            "would-ping",
+            "Eligible for a scheduled start; this dry run never sends requests",
+        )
     } else {
         SchedulerReport::new("pending", "Ready for minimal Codex request")
     };
