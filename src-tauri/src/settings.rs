@@ -40,8 +40,13 @@ impl Settings {
         if !(1..=365).contains(&self.initial_scan_days) {
             anyhow::bail!("initial_scan_days must be between 1 and 365")
         };
-        if self.scheduler_model.is_empty() || self.scheduler_model.len() > 80
-            || !self.scheduler_model.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
+        if self.scheduler_model.is_empty()
+            || self.scheduler_model.len() > 80
+            || !self
+                .scheduler_model
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        {
             anyhow::bail!("scheduler model must be a valid model identifier");
         }
         if let Some(p) = path.parent() {
