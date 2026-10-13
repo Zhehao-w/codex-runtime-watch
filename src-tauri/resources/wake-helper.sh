@@ -140,5 +140,7 @@ if [ -n "$target" ] && [ "$target" -ge "$now" ] && [ "$target" -le "$((now + 180
   hold=1
 fi
 if [ "$hold" -eq 1 ] && [ "$ACTION" != dry-run ]; then
-  /usr/bin/caffeinate -i -t 240 </dev/null >/dev/null 2>&1 &
+  # Keep this launchd job alive while its assertion is active; a detached
+  # background child could be terminated when launchd ends the job.
+  /usr/bin/caffeinate -i -t 240 </dev/null >/dev/null 2>&1
 fi
