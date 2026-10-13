@@ -11,6 +11,7 @@ pub struct Settings {
     pub theme: String,
     pub initial_scan_days: u32,
     pub scheduler_enabled: bool,
+    pub scheduler_wake_enabled: bool,
     pub scheduler_model: String,
 }
 impl Default for Settings {
@@ -22,6 +23,7 @@ impl Default for Settings {
             theme: "system".into(),
             initial_scan_days: 7,
             scheduler_enabled: false,
+            scheduler_wake_enabled: false,
             scheduler_model: "gpt-5.6-luna".into(),
         }
     }
