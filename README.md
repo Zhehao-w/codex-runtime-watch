@@ -68,6 +68,40 @@ npm run generate-icons
 npm run tauri build -- --features desktop
 ```
 
+## Opt-in 5-hour Window Scheduler (macOS, preview)
+
+The Settings page includes a **disabled-by-default** 5-hour window scheduler. This is
+separate from passive runtime monitoring. When enabled, it registers a per-user
+`launchd` LaunchAgent that runs the app's `--window-scheduler-tick` background
+entrypoint once per minute **while macOS is awake**. The scheduler:
+
+- Queries the bundled Codex CLI's `account/rateLimits/read` app-server RPC without
+  consuming model tokens, checking the primary (5-hour) and secondary (weekly) limits.
+- Uses the existing **ChatGPT-plan** login only; missing `auth.json`, non-ChatGPT auth,
+  missing rate limits, weekly usage ≥95%, and missing CLI all cause a safe skip.
+- Starts at local-time **07:00**, then around **12:00 / 17:00 / 22:00**, following the
+  actual reset timestamp rather than blindly starting duplicate windows. Time slots
+  allow 30 minutes of delay; real reset arrivals can be 15 minutes late. No scheduled
+  requests happen after **22:30** or before **07:00**.
+- Sends a one-word reply prompt with read-only sandbox, low reasoning, and
+  `--ephemeral`, with a saved attempt/backoff and cross-process lock.
+- Never redeems banked resets and does not use API-key billing. It makes no request
+  unless explicitly enabled. The **Dry run** button only reads rate limits.
+
+**Important limitation:** this preview handles automatic polling when the Mac is awake;
+it **does not yet install a privileged `pmset` wake scheduler**. A sleeping Mac may miss
+07:00/12:00/17:00/22:00 even though the scheduler LaunchAgent is installed. Adding
+unattended wake scheduling requires a separately reviewed, least-privilege macOS
+helper and explicit administrator approval. Do not treat this version as a finished
+sleep/wake solution.
+
+To test without consuming model usage after an app installation, invoke
+`/Applications/Codex Runtime Watch.app/Contents/MacOS/codex-runtime-watch --window-scheduler-dry-run`
+(adjust the app path as needed). The underlying Codex CLI is discovered from
+`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` first (also
+supports `~/Applications`, `Codex.app`, or system PATH), so a separate CLI installation
+is not needed. Disabling the scheduler removes only its own LaunchAgent.
+
 ## Evidence model
 
 | Label | Meaning | Accepted evidence |
