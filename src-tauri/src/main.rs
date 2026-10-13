@@ -148,9 +148,14 @@ async fn scheduler_check(app: tauri::AppHandle) -> Result<serde_json::Value, Str
         let dir = state.app_dir.clone();
         let report = tauri::async_runtime::spawn_blocking(move || {
             codex_runtime_watch::window_scheduler::tick(
-                settings.scheduler_enabled, &settings.scheduler_model, &dir, true
+                settings.scheduler_enabled,
+                &settings.scheduler_model,
+                &dir,
+                true,
             )
-        }).await.map_err(|e| e.to_string())?;
+        })
+        .await
+        .map_err(|e| e.to_string())?;
         serde_json::to_value(report).map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "macos"))]
@@ -272,12 +277,19 @@ fn show_main(app: &tauri::AppHandle, verify: bool) {
 }
 fn main() {
     #[cfg(target_os = "macos")]
-    if std::env::args().any(|arg| arg == "--window-scheduler-tick" || arg == "--window-scheduler-dry-run") {
+    if std::env::args()
+        .any(|arg| arg == "--window-scheduler-tick" || arg == "--window-scheduler-dry-run")
+    {
         let dry_run = std::env::args().any(|arg| arg == "--window-scheduler-dry-run");
-        let app_dir = dirs::data_dir().unwrap_or_default().join("dev.codexruntimewatch.app");
+        let app_dir = dirs::data_dir()
+            .unwrap_or_default()
+            .join("dev.codexruntimewatch.app");
         let settings = Settings::load(&app_dir.join("settings.json"));
         let report = codex_runtime_watch::window_scheduler::tick(
-            settings.scheduler_enabled, &settings.scheduler_model, &app_dir, dry_run,
+            settings.scheduler_enabled,
+            &settings.scheduler_model,
+            &app_dir,
+            dry_run,
         );
         println!("{}", serde_json::to_string(&report).unwrap_or_default());
         return;
