@@ -89,8 +89,11 @@ impl Limits {
 
 /// A Mac on battery should never initiate an automatic model request.
 fn on_ac_power() -> bool {
-    Command::new("/usr/bin/pmset").args(["-g", "batt"]).output()
-        .ok().filter(|output| output.status.success())
+    Command::new("/usr/bin/pmset")
+        .args(["-g", "batt"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
         .is_some_and(|output| String::from_utf8_lossy(&output.stdout).contains("AC Power"))
 }
 
@@ -332,7 +335,10 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
         return SchedulerReport::new("error", "Invalid model name");
     }
     if !on_ac_power() {
-        return SchedulerReport::new("ac-required", "Automatic starts are disabled on battery power");
+        return SchedulerReport::new(
+            "ac-required",
+            "Automatic starts are disabled on battery power",
+        );
     }
     if let Err(error) = ensure_chatgpt_auth() {
         return SchedulerReport::new("auth-required", error);
