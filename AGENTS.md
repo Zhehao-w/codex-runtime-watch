@@ -14,5 +14,14 @@ do not persist redundant derived status. Run formatting, clippy, Rust tests, Typ
 and the frontend build before committing. Supported release targets are Windows 11 x64 and macOS
 Apple Silicon only; macOS Intel and Linux packaging are not requirements.
 
-Normal monitoring is passive. The manual probe is the sole exception: only an explicit user action
-may send the literal `hi`, and authentication must remain inside Rust with no token logging or UI exposure.
+Normal monitoring is passive. Manual Verify requires an explicit click. The opt-in
+macOS Window Scheduler is the only separately authorized exception, and may send a
+minimal CLI request only after validating the ChatGPT account, real limits, and
+weekly safety threshold. Never automatically spend banked resets or API key credit.
+Authentication must remain in Rust; never log or expose tokens.
+
+The optional macOS Wake Manager is privileged **only** for fixed, owned pmset wake
+events. Its administrator-approved root script must remain root-owned, static, and
+incapable of evaluating user-supplied code or reading Codex credentials. Never
+overwrite other pmset schedules. Install and uninstall only after an explicit user
+action; no global sudoers rules or permanent sleep-setting modifications.
