@@ -2,9 +2,9 @@ pub mod codex;
 pub mod db;
 pub mod settings;
 #[cfg(target_os = "macos")]
-pub mod window_scheduler;
-#[cfg(target_os = "macos")]
 pub mod wake_manager;
+#[cfg(target_os = "macos")]
+pub mod window_scheduler;
 
 use serde::{Deserialize, Serialize};
 
