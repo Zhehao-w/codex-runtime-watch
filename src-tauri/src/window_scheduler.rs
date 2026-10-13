@@ -306,7 +306,7 @@ fn ping(cli: &Path, model: &str) -> Result<(), String> {
 }
 
 pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> SchedulerReport {
-    if !enabled {
+    if !enabled && !dry_run {
         return SchedulerReport::new("disabled", "Scheduler is off; monitoring remains passive");
     }
     let now = Local::now();
@@ -348,7 +348,7 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
             "Missed the 07/12/17/22 start slot; no catch-up",
         )
     } else if dry_run {
-        SchedulerReport::new("would-ping", "Eligible; dry run made no model request")
+        SchedulerReport::new("would-ping", "Eligible for a scheduled start; this dry run never sends requests")
     } else {
         SchedulerReport::new("pending", "Ready for minimal Codex request")
     };
