@@ -669,4 +669,3 @@ mod tests {
         assert!(!dir.path().join("window-next-reset").exists());
     }
 }
-
