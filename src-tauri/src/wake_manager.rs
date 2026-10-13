@@ -17,6 +17,7 @@ const HELPER_CONTENT: &str = include_str!("../resources/wake-helper.sh");
 
 #[derive(Debug, Serialize)]
 pub struct WakeStatus {
+    pub supported: bool,
     pub installed: bool,
     pub enabled: bool,
     pub owned_events: usize,
@@ -53,7 +54,7 @@ pub fn status(app_dir: &Path) -> WakeStatus {
         }
         _ => (0, "Unable to read macOS wake schedule".into()),
     };
-    WakeStatus { installed, enabled: marker_path(app_dir).is_file(), owned_events, detail }
+    WakeStatus { supported: true, installed, enabled: marker_path(app_dir).is_file(), owned_events, detail }
 }
 
 fn xml_escape(value: &str) -> String {
@@ -125,7 +126,6 @@ pub fn install(app_dir: &Path) -> Result<(), String> {
 /// Removes only our daemon and events; other pmset schedules remain intact.
 pub fn uninstall(app_dir: &Path) -> Result<(), String> {
     let marker = validated_marker(app_dir)?;
-    set_marker(app_dir, false)?;
     let command = format!(
         "/bin/launchctl bootout {} >/dev/null 2>&1 || true; \
          if test -f {}; then /bin/sh {} remove {}; fi; \
@@ -134,7 +134,8 @@ pub fn uninstall(app_dir: &Path) -> Result<(), String> {
         shell_quote(ROOT_BIN), shell_quote(ROOT_BIN), shell_quote(&marker),
         shell_quote(ROOT_BIN), shell_quote(ROOT_PLIST)
     );
-    run_admin(&command)
+    run_admin(&command)?;
+    set_marker(app_dir, false)
 }
 
 fn run_admin(command: &str) -> Result<(), String> {
