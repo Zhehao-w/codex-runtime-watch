@@ -68,39 +68,61 @@ npm run generate-icons
 npm run tauri build -- --features desktop
 ```
 
-## Opt-in 5-hour Window Scheduler (macOS, preview)
+## Opt-in 5-hour Window Scheduler (macOS)
 
-The Settings page includes a **disabled-by-default** 5-hour window scheduler. This is
-separate from passive runtime monitoring. When enabled, it registers a per-user
-`launchd` LaunchAgent that runs the app's `--window-scheduler-tick` background
-entrypoint once per minute **while macOS is awake**. The scheduler:
+This optional feature is **OFF by default** and independent of normal passive monitoring.
+It uses the Codex Desktop bundled CLI (no separate CLI installation), `account/rateLimits/read`
+for free status checks, and a minimal ephemeral low-effort Codex request **only when** a
+five-hour window has actually expired. Weekly usage >=95%, missing account/rate-limit
+information, API-key authentication, and battery operation all cause safe skips. The
+optional **Dry Run** never sends a model request or redeems a banked reset.
 
-- Queries the bundled Codex CLI's `account/rateLimits/read` app-server RPC without
-  consuming model tokens, checking the primary (5-hour) and secondary (weekly) limits.
-- Uses the existing **ChatGPT-plan** login only; missing `auth.json`, non-ChatGPT auth,
-  missing rate limits, weekly usage ≥95%, and missing CLI all cause a safe skip.
-- Starts at local-time **07:00**, then around **12:00 / 17:00 / 22:00**, following the
-  actual reset timestamp rather than blindly starting duplicate windows. Time slots
-  allow 30 minutes of delay; real reset arrivals can be 15 minutes late. No scheduled
-  requests happen after **22:30** or before **07:00**.
-- Sends a one-word reply prompt with read-only sandbox, low reasoning, and
-  `--ephemeral`, with a saved attempt/backoff and cross-process lock.
-- Never redeems banked resets and does not use API-key billing. It makes no request
-  unless explicitly enabled. The **Dry run** button only reads rate limits.
+In **Settings → 5-hour Window Scheduler**, enable automatic window starts. The
+scheduler prefers 07:00, then actual ~12:00 / 17:00 / 22:00 reset times, and never
+starts new windows from 22:31 to 06:59 local time. There is a 30-minute anchor
+window for wake/network jitter, and no catch-up burst for missed windows.
 
-**Important limitation:** this preview handles automatic polling when the Mac is awake;
-it **does not yet install a privileged `pmset` wake scheduler**. A sleeping Mac may miss
-07:00/12:00/17:00/22:00 even though the scheduler LaunchAgent is installed. Adding
-unattended wake scheduling requires a separately reviewed, least-privilege macOS
-helper and explicit administrator approval. Do not treat this version as a finished
-sleep/wake solution.
+### Optional MacBook wake-from-sleep integration
 
-To test without consuming model usage after an app installation, invoke
-`/Applications/Codex Runtime Watch.app/Contents/MacOS/codex-runtime-watch --window-scheduler-dry-run`
-(adjust the app path as needed). The underlying Codex CLI is discovered from
-`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` first (also
-supports `~/Applications`, `Codex.app`, or system PATH), so a separate CLI installation
-is not needed. Disabling the scheduler removes only its own LaunchAgent.
+If the Mac is awake, a normal per-user `launchd` agent can check usage. For genuine
+Sleep, also enable **Wake Mac from Sleep** and click **Install / update Wake Manager…**.
+macOS then asks for **administrator approval**. The application installs one fixed,
+root-owned shell helper and one root-owned LaunchDaemon. This root helper can only
+maintain **one-shot `pmset schedule wake`** events at 06:58, 11:58, 16:58,
+21:58 local time for today/tomorrow. It does *not* execute Codex, contact OpenAI,
+read authentication files, or use any arbitrary user-supplied commands. The actual
+Codex request is always made by the separate unprivileged user LaunchAgent.
+
+The root helper's wake events have the owner tag
+`dev.codexruntimewatch.wake-helper`; it never changes `pmset repeat` or any other
+existing event. When turned off, the helper removes only its own events on the
+next awake polling tick. **Remove Wake Manager…** also requires administrator
+approval and removes only the helper, its LaunchDaemon, and its own wake events.
+No sudoers entry, API key, or broad recurring root command permission is installed.
+
+The Mac must stay open, logged in, and preferably connected to AC power. Both
+scheduling and the automatic Codex request stop when unplugged, except that a wake
+already scheduled while plugged in might still fire after unplugging during sleep.
+macOS can still defer or miss wakes. A successful wake does not guarantee network
+availability; the scheduler fails closed and retries only on its normal guarded ticks.
+The helper briefly holds an **idle-sleep-only** assertion around each scheduled wake
+for up to three minutes; it does not change the Mac's permanent power settings or
+prevent manual Sleep.
+
+**Security:** The administrator prompt is shown only after clicking an install/remove
+button. The installed helper is root-owned and installed from a fixed embedded source;
+it cannot execute a user-editable script. Credentials remain with the ordinary Codex
+CLI account. Review `src-tauri/resources/wake-helper.sh` and
+`src-tauri/src/wake_manager.rs` before approving the prompt.
+
+**Testing before enabling requests:** Install the app, leave the main scheduler
+unchecked, and use the Settings **Dry Run** to inspect 5h and weekly status without
+spending tokens. Then install the Wake Manager and inspect `pmset -g sched`; only
+its own wake entries should be added. A first real unattended run should be done
+with the MacBook **open, plugged in, and already logged in**, and verified using
+`pmset -g log` plus app status; the previous one-time macOS wake test is not a
+substitute for testing the installed LaunchDaemon. Remove the helper if any
+unexpected schedule changes or resume problems appear.
 
 ## Evidence model
 
