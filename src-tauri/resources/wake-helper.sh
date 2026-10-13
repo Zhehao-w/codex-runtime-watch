@@ -47,6 +47,10 @@ if ! "$PMSET" -g batt | /usr/bin/grep -q "AC Power"; then
   exit 0
 fi
 
+# Fail closed if the system cannot report scheduled events. Never create
+# duplicate events when the schedule list is unavailable.
+"$PMSET" -g sched >/dev/null
+
 now=$("$DATE" +%s)
 for offset in 0 1; do
   for hour in 06 11 16 21; do
