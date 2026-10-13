@@ -104,6 +104,10 @@ fn save_settings(
     if settings.scheduler_enabled {
         return Err("Window Scheduler requires macOS".into());
     }
+    #[cfg(target_os = "macos")]
+    codex_runtime_watch::wake_manager::set_marker(
+        &state.app_dir, settings.scheduler_enabled && settings.scheduler_wake_enabled
+    )?;
     settings
         .save(&state.settings_path)
         .map_err(|e| e.to_string())?;
@@ -162,6 +166,55 @@ async fn scheduler_check(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     {
         let _ = app;
         Ok(serde_json::json!({"action":"unavailable","detail":"Window Scheduler requires macOS"}))
+    }
+}
+#[tauri::command]
+fn wake_status(app: tauri::AppHandle) -> serde_json::Value {
+    #[cfg(target_os = "macos")]
+    {
+        let state = app.state::<State>();
+        serde_json::to_value(codex_runtime_watch::wake_manager::status(&state.app_dir))
+            .unwrap_or_default()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        serde_json::json!({"installed":false,"enabled":false,"owned_events":0,
+            "detail":"Wake from Sleep is available on macOS only"})
+    }
+}
+#[tauri::command]
+async fn wake_install(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let dir = app.state::<State>().app_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            codex_runtime_watch::wake_manager::install(&dir)?;
+            serde_json::to_value(codex_runtime_watch::wake_manager::status(&dir))
+                .map_err(|e| e.to_string())
+        }).await.map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Wake helper installation is macOS-only".into())
+    }
+}
+#[tauri::command]
+async fn wake_uninstall(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let dir = app.state::<State>().app_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            codex_runtime_watch::wake_manager::uninstall(&dir)?;
+            serde_json::to_value(codex_runtime_watch::wake_manager::status(&dir))
+                .map_err(|e| e.to_string())
+        }).await.map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Wake helper removal is macOS-only".into())
     }
 }
 #[tauri::command]
@@ -532,7 +585,10 @@ fn main() {
             clear_history,
             verify_backend,
             open_folder,
-            scheduler_check
+            scheduler_check,
+            wake_status,
+            wake_install,
+            wake_uninstall
         ])
         .run(tauri::generate_context!())
         .expect("application runtime failed")
