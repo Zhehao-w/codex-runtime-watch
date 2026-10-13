@@ -16,6 +16,7 @@ required-features = ["desktop"]
 desktop = ["dep:tauri", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart", "dep:tauri-plugin-single-instance", "dep:opener"]
 
 [dependencies]
+base64 = "0.22"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
