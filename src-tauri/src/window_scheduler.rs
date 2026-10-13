@@ -339,6 +339,76 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     }
 }
 
+fn agent_plist_path() -> Result<PathBuf, String> {
+    dirs::home_dir()
+        .map(|h| h.join("Library/LaunchAgents").join(format!("{AGENT_LABEL}.plist")))
+        .ok_or("Unable to find home directory".into())
+}
+
+fn launchctl_uid() -> Result<String, String> {
+    let output = Command::new("/usr/bin/id").arg("-u").output()
+        .map_err(|e| format!("Cannot determine UID: {e}"))?;
+    if !output.status.success() {
+        return Err("Unable to determine launchd user domain".into());
+    }
+    let uid = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    let uid = uid.trim().to_owned();
+    if uid.is_empty() || !uid.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Invalid launchd UID".into());
+    }
+    Ok(uid)
+}
+
+fn xml_escape(input: &str) -> String {
+    input.replace('&', "&amp;").replace('<', "&lt;")
+        .replace('>', "&gt;").replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Manage only our own unprivileged per-user LaunchAgent. This does NOT
+/// schedule macOS wake events or change power-management settings.
+pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
+    let plist = agent_plist_path()?;
+    let domain = format!("gui/{}", launchctl_uid()?);
+    let service = format!("{domain}/{AGENT_LABEL}");
+    let _ = Command::new("/bin/launchctl")
+        .args(["bootout", &service]).output();
+
+    if !enabled {
+        match fs::remove_file(&plist) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(format!("Cannot remove scheduler LaunchAgent: {e}")),
+        };
+        return Ok(());
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot locate app executable: {e}"))?;
+    let exe = exe.to_string_lossy();
+    let content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>{AGENT_LABEL}</string>
+<key>ProgramArguments</key><array><string>{}</string><string>--window-scheduler-tick</string></array>
+<key>StartInterval</key><integer>60</integer>
+<key>RunAtLoad</key><true/>
+<key>StandardOutPath</key><string>/dev/null</string>
+<key>StandardErrorPath</key><string>/dev/null</string>
+</dict></plist>"#, xml_escape(&exe));
+    if let Some(parent) = plist.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let temp = plist.with_extension("tmp");
+    fs::write(&temp, content).and_then(|_| fs::rename(temp, &plist))
+        .map_err(|e| format!("Cannot install scheduler LaunchAgent: {e}"))?;
+    let result = Command::new("/bin/launchctl")
+        .args(["bootstrap", &domain, plist.to_string_lossy().as_ref()])
+        .output().map_err(|e| format!("Cannot start scheduler LaunchAgent: {e}"))?;
+    if !result.status.success() {
+        return Err(format!("launchctl bootstrap failed: {}", String::from_utf8_lossy(&result.stderr)));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
