@@ -410,7 +410,11 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
         Err(error) => return SchedulerReport::new("rpc-failed", error),
     };
     if !dry_run {
-        if let Err(error) = publish_next_reset(app_dir, limits.primary_reset, now.timestamp()) {
+        if let Err(error) = publish_next_reset(
+            app_dir,
+            if limits.weekly_used >= 95.0 { 0 } else { limits.primary_reset },
+            now.timestamp(),
+        ) {
             return SchedulerReport::new("wake-update-failed", error);
         }
     }
@@ -614,4 +618,45 @@ mod tests {
         let report = tick(false, "gpt-5.6-luna", Path::new("/unused"), false);
         assert_eq!(report.action, "disabled");
     }
+
+    #[test]
+    fn dynamic_wake_follows_server_reset_and_enforces_daytime() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("window-wake-enabled"), b"enabled").unwrap();
+
+        let noon = Local
+            .with_ymd_and_hms(2026, 10, 13, 12, 3, 0)
+            .single()
+            .unwrap();
+        publish_next_reset(dir.path(), noon.timestamp(), noon.timestamp() - 3600).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("window-next-reset")).unwrap(),
+            format!("{}\\n", noon.timestamp())
+        );
+
+        let night = Local
+            .with_ymd_and_hms(2026, 10, 13, 23, 0, 0)
+            .single()
+            .unwrap();
+        publish_next_reset(dir.path(), night.timestamp(), night.timestamp() - 3600).unwrap();
+        assert!(!dir.path().join("window-next-reset").exists());
+    }
+
+    #[test]
+    fn dynamic_wake_requires_explicit_marker_and_recent_future_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let reset = Local
+            .with_ymd_and_hms(2026, 10, 13, 17, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp();
+        publish_next_reset(dir.path(), reset, reset - 3600).unwrap();
+        assert!(!dir.path().join("window-next-reset").exists());
+        fs::write(dir.path().join("window-wake-enabled"), b"enabled").unwrap();
+        publish_next_reset(dir.path(), reset, reset - 7 * 3600).unwrap();
+        assert!(!dir.path().join("window-next-reset").exists());
+        publish_next_reset(dir.path(), reset, reset - 45).unwrap();
+        assert!(!dir.path().join("window-next-reset").exists());
+    }
 }
+
