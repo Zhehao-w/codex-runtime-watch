@@ -631,7 +631,7 @@ mod tests {
         publish_next_reset(dir.path(), noon.timestamp(), noon.timestamp() - 3600).unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("window-next-reset")).unwrap(),
-            format!("{}\\n", noon.timestamp())
+            format!("{}\n", noon.timestamp())
         );
 
         let night = Local
