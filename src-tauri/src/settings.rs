@@ -10,6 +10,8 @@ pub struct Settings {
     pub start_at_login: bool,
     pub theme: String,
     pub initial_scan_days: u32,
+    pub scheduler_enabled: bool,
+    pub scheduler_model: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -19,6 +21,8 @@ impl Default for Settings {
             start_at_login: false,
             theme: "system".into(),
             initial_scan_days: 7,
+            scheduler_enabled: false,
+            scheduler_model: "gpt-5.6-luna".into(),
         }
     }
 }
@@ -36,6 +40,10 @@ impl Settings {
         if !(1..=365).contains(&self.initial_scan_days) {
             anyhow::bail!("initial_scan_days must be between 1 and 365")
         };
+        if self.scheduler_model.is_empty() || self.scheduler_model.len() > 80
+            || !self.scheduler_model.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
+            anyhow::bail!("scheduler model must be a valid model identifier");
+        }
         if let Some(p) = path.parent() {
             fs::create_dir_all(p)?
         };
