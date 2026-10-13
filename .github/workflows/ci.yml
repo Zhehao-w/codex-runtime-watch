@@ -40,6 +40,8 @@ jobs:
       - run: npm ci
       - run: npm run generate-icons
       - if: runner.os == 'macOS'
+        run: sh -n src-tauri/resources/wake-helper.sh
+      - if: runner.os == 'macOS'
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - if: runner.os == 'macOS'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
