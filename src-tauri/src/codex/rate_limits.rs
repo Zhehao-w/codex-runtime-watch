@@ -172,14 +172,22 @@ mod tests {
 
     #[test]
     fn backend_ordinary_usage_permission_must_be_explicit() {
-        let base = ordinary_response(Some(json!({"availableCount":10})));
-        let mut value = base.clone();
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(true));
+        let mut value = ordinary_response(Some(json!({"availableCount":10})));
+        assert_eq!(
+            Limits::parse(&value).unwrap().ordinary_usage_allowed,
+            Some(true)
+        );
         value["result"]["ordinaryUsageAllowed"] = json!(false);
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(false));
+        assert_eq!(
+            Limits::parse(&value).unwrap().ordinary_usage_allowed,
+            Some(false)
+        );
         value["result"]["ordinaryUsageAllowed"] = Value::Null;
         assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
-        value["result"].as_object_mut().unwrap().remove("ordinaryUsageAllowed");
+        value["result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ordinaryUsageAllowed");
         assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
     }
 }
