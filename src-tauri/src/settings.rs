@@ -55,3 +55,24 @@ impl Settings {
         fs::rename(tmp, path).context("replace settings")
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn accepts_open_ended_model_identifiers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.scheduler_model = format!("org/vendor:experimental/{}", "v".repeat(120));
+        settings.save(&dir.path().join("settings.json")).unwrap();
+        assert_eq!(Settings::load(&dir.path().join("settings.json")), settings);
+    }
+    #[test]
+    fn rejects_blank_or_control_character_model_identifiers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.scheduler_model = "  ".into();
+        assert!(settings.save(&dir.path().join("settings.json")).is_err());
+        settings.scheduler_model = "valid\\ninvalid".replace("\\n", "\n");
+        assert!(settings.save(&dir.path().join("settings.json")).is_err());
+    }
+}
