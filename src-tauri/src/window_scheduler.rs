@@ -420,17 +420,15 @@ pub fn tick(
     });
     match result {
         Ok(after) => {
-            if let Err(error) =
-                publish_next_reset(
-                    app_dir,
-                    if ordinary_usage_safe(&after) {
-                        after.primary_reset
-                    } else {
-                        0
-                    },
-                    Utc::now().timestamp(),
-                )
-            {
+            if let Err(error) = publish_next_reset(
+                app_dir,
+                if ordinary_usage_safe(&after) {
+                    after.primary_reset
+                } else {
+                    0
+                },
+                Utc::now().timestamp(),
+            ) {
                 let _ = save_attempt(
                     app_dir,
                     "started",
