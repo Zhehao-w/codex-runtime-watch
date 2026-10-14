@@ -283,7 +283,8 @@ mod tests {
     #[test]
     fn owner_verification_refuses_another_macos_account() {
         let alice = "/Users/alice/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
-        let bob = "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let bob =
+            "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
         assert!(verify_service_owner(None, alice).is_ok());
         assert!(verify_service_owner(Some(alice), alice).is_ok());
         assert!(verify_service_owner(Some(bob), alice).is_err());
