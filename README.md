@@ -77,6 +77,18 @@ five-hour window has actually expired. Weekly usage >=95%, missing account/rate-
 information, API-key authentication, and battery operation all cause safe skips. The
 optional **Dry Run** never sends a model request or redeems a banked reset.
 
+**Hard safety rule: saved Reset Credits are never spent.** The scheduler never invokes
+`account/rateLimitResetCredit/consume` or another redemption operation. Before
+each ordinary model request, the app-server MUST confirm `ordinaryUsageAllowed: true`
+and `rateLimitResetCredits.availableCount: 0`, including a **fresh second read
+immediately before the request**. If either field is missing, null, false/positive,
+invalid, or the usage read fails, the scheduler **skips the request**. It also skips
+when credits exist even if ordinary usage would otherwise be permitted, prioritizing
+the user's earned reset credits over 5-hour scheduling. No 5h reset timestamp or
+usage percentage can override this policy. This relies on the Codex server's
+documented distinction between ordinary included usage and the explicit credit
+redemption operation; if the backend changes, this feature must fail closed.
+
 In **Settings → 5-hour Window Scheduler**, enable automatic window starts. The
 scheduler prefers 07:00, then actual ~12:00 / 17:00 / 22:00 reset times, and never
 starts new windows from 22:31 to 06:59 local time. There is a 30-minute anchor
