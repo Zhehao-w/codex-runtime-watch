@@ -16,7 +16,6 @@ pub struct Limits {
     pub primary_reset: i64,
     pub primary_used: f64,
     pub weekly_used: f64,
-    pub reset_credits_available: u64,
     pub ordinary_usage_allowed: Option<bool>,
 }
 
@@ -33,15 +32,8 @@ impl Limits {
             .get("result")
             .and_then(|result| result.get("ordinaryUsageAllowed"))
             .and_then(Value::as_bool);
-        // Always verify the banked reset-credit state. Without a verified
-        // zero count, an automatic ping could redeem a stored reset.
-        // This field belongs to result, not to result.rateLimits.
-        let reset_credits_available = value
-            .get("result")
-            .and_then(|result| result.get("rateLimitResetCredits"))
-            .and_then(|credits| credits.get("availableCount"))
-            .and_then(Value::as_u64)
-            .ok_or("Reset-credit availability is missing or invalid; skipping automatic usage")?;
+        // Banked Reset Credits are never redeemed by this adapter. Their
+        // existence or availability is irrelevant to ordinary quota use.
         let primary = limits.get("primary").ok_or("Missing primary window")?;
         let secondary = limits.get("secondary").ok_or("Missing weekly window")?;
         let primary_reset = primary
@@ -67,7 +59,6 @@ impl Limits {
             primary_reset,
             primary_used,
             weekly_used,
-            reset_credits_available,
             ordinary_usage_allowed,
         })
     }
@@ -115,7 +106,7 @@ pub fn read_limits(cli: &Path, codex_home: &Path) -> Result<Limits, String> {
     let request = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-runtime-watch\",\"title\":\"Codex Runtime Watch\",\"version\":\"0.1.1\"}}}\n",
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{\"excludeResetCreditDetails\":false}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{\"supportsLunaReserve\":false,\"excludeResetCreditDetails\":true}}\n"
     );
     if let Err(e) = stdin
         .write_all(request.as_bytes())
@@ -139,69 +130,56 @@ pub fn read_limits(cli: &Path, codex_home: &Path) -> Result<Limits, String> {
 mod tests {
     use super::*;
     use serde_json::json;
-    #[test]
-    fn rejects_incomplete_or_invalid_limits() {
-        let valid = json!({"result":{
-            "rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}},
-            "rateLimitResetCredits":{"availableCount":0}
-        }});
-        let parsed = Limits::parse(&valid).unwrap();
-        assert_eq!(parsed.weekly_used, 50.0);
-        assert_eq!(parsed.reset_credits_available, 0);
-        assert!(Limits::parse(&json!({"result":{"rateLimits":{
-            "primary":{"resetsAt":123,"usedPercent":0},
-            "secondary":{"usedPercent":50}
-        }}}))
-        .is_err());
-        assert!(Limits::parse(&json!({"result":{
-            "rateLimits":{"primary":{"resetsAt":123,"usedPercent":0},"secondary":{"usedPercent":101}},
-            "rateLimitResetCredits":{"availableCount":0}
-        }})).is_err());
-    }
 
-    #[test]
-    fn reset_credit_count_must_be_explicit_and_nonnegative() {
-        let data = json!({"result":{
-            "rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}},
-            "rateLimitResetCredits":{"availableCount":2}
-        }});
-        assert_eq!(Limits::parse(&data).unwrap().reset_credits_available, 2);
-        for invalid in [
-            Value::Null,
-            json!({}),
-            json!({"availableCount":null}),
-            json!({"availableCount":-1}),
-            json!({"availableCount":"0"}),
-        ] {
-            let mut value = data.clone();
-            value["result"]["rateLimitResetCredits"] = invalid;
-            assert!(Limits::parse(&value).is_err());
-        }
-    }
-    #[test]
-    fn ordinary_usage_permission_must_be_explicit() {
-        let base = json!({"result":{
+    fn ordinary_response(credits: Option<Value>) -> Value {
+        let mut response = json!({"result":{
+            "ordinaryUsageAllowed": true,
             "rateLimits":{
                 "primary":{"resetsAt":123,"usedPercent":0.0},
                 "secondary":{"usedPercent":50.0}
-            },
-            "rateLimitResetCredits":{"availableCount":0}
+            }
         }});
+        if let Some(credits) = credits {
+            response["result"]["rateLimitResetCredits"] = credits;
+        }
+        response
+    }
+
+    #[test]
+    fn ordinary_limits_parse_regardless_of_banked_reset_credits() {
+        for credits in [
+            None,
+            Some(json!({"availableCount":0})),
+            Some(json!({"availableCount":2})),
+            Some(json!({"availableCount":100})),
+            Some(Value::Null),
+            Some(json!({"availableCount":"unknown"})),
+        ] {
+            let limits = Limits::parse(&ordinary_response(credits)).unwrap();
+            assert_eq!(limits.weekly_used, 50.0);
+            assert_eq!(limits.ordinary_usage_allowed, Some(true));
+        }
+    }
+
+    #[test]
+    fn limits_still_fail_closed_on_missing_primary_or_weekly_data() {
+        let mut data = ordinary_response(Some(json!({"availableCount":5})));
+        data["result"]["rateLimits"]["secondary"] = Value::Null;
+        assert!(Limits::parse(&data).is_err());
+        data["result"]["rateLimits"]["secondary"] = json!({"usedPercent":101});
+        assert!(Limits::parse(&data).is_err());
+    }
+
+    #[test]
+    fn backend_ordinary_usage_permission_must_be_explicit() {
+        let base = ordinary_response(Some(json!({"availableCount":10})));
         let mut value = base.clone();
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
-        value["result"]["ordinaryUsageAllowed"] = json!(null);
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(true));
         value["result"]["ordinaryUsageAllowed"] = json!(false);
-        assert_eq!(
-            Limits::parse(&value).unwrap().ordinary_usage_allowed,
-            Some(false)
-        );
-        value["result"]["ordinaryUsageAllowed"] = json!("true");
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(false));
+        value["result"]["ordinaryUsageAllowed"] = Value::Null;
         assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
-        value["result"]["ordinaryUsageAllowed"] = json!(true);
-        assert_eq!(
-            Limits::parse(&value).unwrap().ordinary_usage_allowed,
-            Some(true)
-        );
+        value["result"].as_object_mut().unwrap().remove("ordinaryUsageAllowed");
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
     }
 }
