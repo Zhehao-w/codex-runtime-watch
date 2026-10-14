@@ -16,6 +16,7 @@ use std::{
 };
 
 const BACKOFF_SECONDS: i64 = 30 * 60;
+const RESET_RETRY_SECONDS: i64 = 60 * 60;
 const AGENT_LABEL: &str = "dev.codexruntimewatch.window-scheduler";
 
 #[derive(Debug, Serialize)]
@@ -164,8 +165,9 @@ fn allowed_time(now: DateTime<Local>, reset: i64) -> bool {
     let in_anchor = [420_u32, 720, 1020, 1320]
         .into_iter()
         .any(|anchor| minute >= anchor && minute <= anchor + 30);
-    // Follow real (possibly delayed) reset times, without replaying old slots.
-    let just_reset = reset > 0 && now.timestamp() >= reset && now.timestamp() - reset <= 15 * 60;
+    // Allow retry after a 30-minute backoff, but only within one hour of the
+    // actual reset and never outside the daily 07:00–22:30 quiet-hours guard.
+    let just_reset = reset > 0 && now.timestamp() >= reset && now.timestamp() - reset <= RESET_RETRY_SECONDS;
     in_anchor || just_reset
 }
 
@@ -356,6 +358,14 @@ pub fn tick(
         );
         attach_limits(&fresh, &mut report);
         return report;
+    }
+    // A delayed rate-limit RPC may take up to 30 seconds per call. The power
+    // source must be checked again immediately before starting the request.
+    if !on_ac_power() {
+        return SchedulerReport::new(
+            "ac-required",
+            "Power changed to battery before the request; automatic start cancelled",
+        );
     }
     // Save before sending, preventing crash/restart from causing duplicate pings.
     if let Err(error) = save_attempt(app_dir, "attempt", "pending") {
@@ -628,6 +638,23 @@ mod tests {
             weekly_used: 95.0,
             ..ordinary
         }));
+    }
+
+    #[test]
+    fn off_anchor_reset_remains_retryable_after_backoff() {
+        let reset = Local
+            .with_ymd_and_hms(2026, 10, 13, 12, 34, 0)
+            .single()
+            .unwrap();
+        assert!(RESET_RETRY_SECONDS > BACKOFF_SECONDS);
+        assert!(allowed_time(reset + chrono::Duration::minutes(31), reset.timestamp()));
+        assert!(allowed_time(reset + chrono::Duration::minutes(59), reset.timestamp()));
+        assert!(!allowed_time(reset + chrono::Duration::minutes(61), reset.timestamp()));
+        let night = Local
+            .with_ymd_and_hms(2026, 10, 13, 22, 31, 0)
+            .single()
+            .unwrap();
+        assert!(!allowed_time(night, night.timestamp() - 31 * 60));
     }
 
     #[test]
