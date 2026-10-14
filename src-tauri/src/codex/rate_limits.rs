@@ -1,7 +1,14 @@
 //! Upstream Codex app-server rate-limit RPC and its response schema.
 //! Keep protocol knowledge here, not in scheduler policy code.
 use serde_json::Value;
-use std::{io::{BufRead, BufReader, Write}, path::Path, process::{Child, Command, Stdio}, sync::mpsc, thread, time::Duration};
+use std::{
+    io::{BufRead, BufReader, Write},
+    path::Path,
+    process::{Child, Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
@@ -44,9 +51,7 @@ impl Limits {
             weekly_used,
         })
     }
-
 }
-
 
 fn stop_child(child: &mut Child) {
     let _ = child.kill();
@@ -110,16 +115,18 @@ pub fn read_limits(cli: &Path, codex_home: &Path) -> Result<Limits, String> {
     Limits::parse(&value)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     #[test]
     fn rejects_incomplete_or_invalid_limits() {
-        let valid=json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}}}});
-        assert_eq!(Limits::parse(&valid).unwrap().weekly_used,50.0);
-        assert!(Limits::parse(&json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0}}}})).is_err());
+        let valid = json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}}}});
+        assert_eq!(Limits::parse(&valid).unwrap().weekly_used, 50.0);
+        assert!(Limits::parse(
+            &json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0}}}})
+        )
+        .is_err());
         assert!(Limits::parse(&json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0},"secondary":{"usedPercent":101}}}})).is_err());
     }
 }
