@@ -17,7 +17,12 @@ Apple Silicon only; macOS Intel and Linux packaging are not requirements.
 Normal monitoring is passive. Manual Verify requires an explicit click. The opt-in
 macOS Window Scheduler is the only separately authorized exception, and may send a
 minimal CLI request only after validating the ChatGPT account, real limits, and
-weekly safety threshold. Never automatically spend banked resets or API key credit.
+weekly safety threshold. **Never automatically spend banked Reset Credits under any
+circumstances**. The scheduler must not invoke any reset-credit consume/redeem
+method. Only after a fresh account rate-limit read returns explicit
+`ordinaryUsageAllowed: true` AND exactly zero available Reset Credits may it issue
+an ordinary model request; missing/ambiguous fields must fail closed. No
+timestamp or percentage can substitute for backend permission. Never spend API key credit.
 Authentication must remain in Rust; never log or expose tokens.
 
 The optional macOS Wake Manager is privileged **only** for its own fixed
