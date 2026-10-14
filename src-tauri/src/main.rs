@@ -156,6 +156,7 @@ async fn scheduler_check(app: tauri::AppHandle) -> Result<serde_json::Value, Str
                 settings.scheduler_enabled,
                 &settings.scheduler_model,
                 &dir,
+                &codex_home(&settings),
                 true,
             )
         })
@@ -357,6 +358,7 @@ fn main() {
             settings.scheduler_enabled,
             &settings.scheduler_model,
             &app_dir,
+            &codex_home(&settings),
             dry_run,
         );
         println!("{}", serde_json::to_string(&report).unwrap_or_default());
