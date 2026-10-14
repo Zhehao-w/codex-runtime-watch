@@ -192,33 +192,59 @@ fn plist(marker: &str) -> String {
 /// A one-time OS administrator prompt, ONLY when the user clicks Install.
 /// The installed root-owned code and launchd configuration are fixed strings,
 /// not mutable scripts or commands supplied by the frontend.
+fn build_install_command(marker: &str) -> String {
+    let helper_b64 = STANDARD.encode(HELPER_CONTENT);
+    let plist_b64 = STANDARD.encode(plist(marker));
+    let guard = privileged_owner_guard(marker);
+    let bin = shell_quote(ROOT_BIN);
+    let plist = shell_quote(ROOT_PLIST);
+    let service = shell_quote(&format!("system/{LABEL}"));
+
+    // All preparation and validation happens while the existing service runs.
+    // Backups are made before bootout. No live file is truncated in place.
+    // On *any* activation failure, restore the prior helper/plist and
+    // restart the previous daemon if it was previously loaded.
+    format!(
+        "set -eu; {guard} \
+         /bin/mkdir -p /Library/PrivilegedHelperTools /Library/LaunchDaemons; \
+         stage=$(/usr/bin/mktemp -d /Library/PrivilegedHelperTools/.codexruntimewatch.XXXXXXXX); \
+         trap '/bin/rm -rf \"$stage\"' EXIT; \
+         /usr/bin/printf %s {helper_b64} | /usr/bin/base64 -D > \"$stage/new-helper\"; \
+         /usr/bin/printf %s {plist_b64} | /usr/bin/base64 -D > \"$stage/new-plist\"; \
+         /bin/sh -n \"$stage/new-helper\"; \
+         /usr/bin/plutil -lint \"$stage/new-plist\" >/dev/null; \
+         /usr/sbin/chown root:wheel \"$stage/new-helper\" \"$stage/new-plist\"; \
+         /bin/chmod 0755 \"$stage/new-helper\"; \
+         /bin/chmod 0644 \"$stage/new-plist\"; \
+         if test -f {bin}; then /bin/cp -p {bin} \"$stage/old-helper\"; fi; \
+         if test -f {plist}; then /bin/cp -p {plist} \"$stage/old-plist\"; fi; \
+         was_loaded=0; \
+         if /bin/launchctl print {service} >/dev/null 2>&1; then \
+           was_loaded=1; /bin/launchctl bootout {service}; \
+         fi; \
+         if /bin/mv -f \"$stage/new-helper\" {bin} \
+           && /bin/mv -f \"$stage/new-plist\" {plist} \
+           && /bin/launchctl bootstrap system {plist}; then \
+           :; \
+         else \
+           if test -f \"$stage/old-helper\"; then \
+             /bin/cp -p \"$stage/old-helper\" {bin} || true; \
+           else /bin/rm -f {bin} || true; fi; \
+           if test -f \"$stage/old-plist\"; then \
+             /bin/cp -p \"$stage/old-plist\" {plist} || true; \
+           else /bin/rm -f {plist} || true; fi; \
+           if test \"$was_loaded\" -eq 1 && test -f {plist}; then \
+             /bin/launchctl bootstrap system {plist} || true; \
+           fi; \
+           exit 1; \
+         fi"
+    )
+}
+
 pub fn install(app_dir: &Path) -> Result<(), String> {
     let marker = validated_marker(app_dir)?;
     ensure_current_user_owns_service(&marker)?;
-    let helper_b64 = STANDARD.encode(HELPER_CONTENT);
-    let plist_b64 = STANDARD.encode(plist(&marker));
-    let service = format!("system/{LABEL}");
-    let guard = privileged_owner_guard(&marker);
-    let command = format!(
-        "set -e; {guard}/bin/mkdir -p /Library/PrivilegedHelperTools /Library/LaunchDaemons; \
-         /bin/launchctl bootout {} >/dev/null 2>&1 || true; \
-         /usr/bin/printf %s {} | /usr/bin/base64 -D > {}; \
-         /usr/sbin/chown root:wheel {}; /bin/chmod 0755 {}; \
-         /usr/bin/printf %s {} | /usr/bin/base64 -D > {}; \
-         /usr/sbin/chown root:wheel {}; /bin/chmod 0644 {}; \
-         /bin/launchctl bootstrap system {}",
-        shell_quote(&service),
-        shell_quote(&helper_b64),
-        shell_quote(ROOT_BIN),
-        shell_quote(ROOT_BIN),
-        shell_quote(ROOT_BIN),
-        shell_quote(&plist_b64),
-        shell_quote(ROOT_PLIST),
-        shell_quote(ROOT_PLIST),
-        shell_quote(ROOT_PLIST),
-        shell_quote(ROOT_PLIST)
-    );
-    run_admin(&command)
+    run_admin(&build_install_command(&marker))
 }
 
 /// Removes only our daemon and events; other pmset schedules remain intact.
@@ -278,6 +304,26 @@ mod tests {
         assert!(!xml.contains("codex-cli"));
         assert!(!xml.contains("OPENAI"));
         assert!(xml.contains(ROOT_BIN));
+    }
+
+    #[test]
+    fn install_stages_validates_and_rolls_back_without_truncating_live_files() {
+        let marker = "/Users/alice/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let command = build_install_command(marker);
+        let stage = command.find("mktemp -d").unwrap();
+        let validate_helper = command.find("/bin/sh -n").unwrap();
+        let validate_plist = command.find("/usr/bin/plutil -lint").unwrap();
+        let backup = command.find("$stage/old-helper").unwrap();
+        let stop_old = command.find("/bin/launchctl bootout").unwrap();
+        assert!(stage < validate_helper);
+        assert!(validate_helper < validate_plist);
+        assert!(validate_plist < backup);
+        assert!(backup < stop_old);
+        assert!(command.contains("/bin/cp -p \"$stage/old-helper\""));
+        assert!(command.contains("/bin/cp -p \"$stage/old-plist\""));
+        assert!(command.contains("was_loaded=1"));
+        assert!(command.contains("&& /bin/launchctl bootstrap system"));
+        assert!(command.contains("exit 1"));
     }
 
     #[test]
