@@ -501,7 +501,11 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
         xml_escape(&exe.to_string_lossy())
     );
     if old_content.as_deref() == Some(content.as_bytes()) {
-        return if loaded { Ok(()) } else { launchctl_bootstrap(&domain, &plist) };
+        return if loaded {
+            Ok(())
+        } else {
+            launchctl_bootstrap(&domain, &plist)
+        };
     }
     if let Some(parent) = plist.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -527,8 +531,10 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
             .map_err(|e| format!("Cannot unload scheduler LaunchAgent: {e}"))?;
         if !output.status.success() {
             let _ = fs::remove_file(&temp);
-            return Err(format!("Cannot unload scheduler LaunchAgent: {}",
-                String::from_utf8_lossy(&output.stderr)));
+            return Err(format!(
+                "Cannot unload scheduler LaunchAgent: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
     }
     if let Err(e) = fs::rename(&temp, &plist) {
@@ -543,8 +549,7 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
                 .and_then(|_| fs::rename(&temp, &plist))
                 .map_err(|e| format!("Cannot restore previous LaunchAgent: {e}"))
         } else {
-            fs::remove_file(&plist)
-                .map_err(|e| format!("Cannot remove failed LaunchAgent: {e}"))
+            fs::remove_file(&plist).map_err(|e| format!("Cannot remove failed LaunchAgent: {e}"))
         };
         let restart = if loaded && restored.is_ok() {
             launchctl_bootstrap(&domain, &plist)
@@ -594,7 +599,13 @@ mod tests {
 
     #[test]
     fn disabled_never_requests() {
-        let report = tick(false, "gpt-5.6-luna", Path::new("/unused"), Path::new("/unused"), false);
+        let report = tick(
+            false,
+            "gpt-5.6-luna",
+            Path::new("/unused"),
+            Path::new("/unused"),
+            false,
+        );
         assert_eq!(report.action, "disabled");
     }
 
