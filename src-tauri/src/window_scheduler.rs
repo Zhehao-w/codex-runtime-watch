@@ -1,6 +1,9 @@
 //! Opt-in macOS 5-hour window scheduler. No model calls happen while disabled.
 //! Uses the bundled Codex CLI: rate-limit reads do not consume model tokens.
-use crate::codex::rate_limits::{read_limits, Limits};
+use crate::codex::{
+    minimal_request::start_ordinary_window,
+    rate_limits::{read_limits, Limits},
+};
 use chrono::{DateTime, Local, Timelike, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -9,11 +12,9 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-const PING_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKOFF_SECONDS: i64 = 30 * 60;
 const AGENT_LABEL: &str = "dev.codexruntimewatch.window-scheduler";
 
@@ -225,50 +226,6 @@ fn acquire_lock(app_dir: &Path) -> Result<Option<TickLock>, String> {
     }
 }
 
-fn ping(cli: &Path, model: &str, codex_home: &Path) -> Result<(), String> {
-    let mut child = Command::new(cli)
-        .args([
-            "exec",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
-            "--skip-git-repo-check",
-            "-s",
-            "read-only",
-            "-m",
-            model,
-            "-c",
-            "model_reasoning_effort=low",
-            "--json",
-            "Reply with exactly OK. Do not use tools.",
-        ])
-        .current_dir(std::env::temp_dir())
-        .env("CODEX_HOME", codex_home)
-        .env_remove("OPENAI_API_KEY")
-        .env_remove("CODEX_API_KEY")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Cannot launch Codex CLI: {e}"))?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("Codex exited with {status}")),
-            Ok(None) if start.elapsed() < PING_TIMEOUT => thread::sleep(Duration::from_millis(250)),
-            Ok(None) => {
-                stop_child(&mut child);
-                return Err("Codex ping timed out".into());
-            }
-            Err(e) => {
-                stop_child(&mut child);
-                return Err(e.to_string());
-            }
-        }
-    }
-}
-
 pub fn tick(
     enabled: bool,
     model: &str,
@@ -404,7 +361,7 @@ pub fn tick(
     if let Err(error) = save_attempt(app_dir, "attempt", "pending") {
         return SchedulerReport::new("error", error);
     }
-    let result = ping(&cli, model, &codex_home).and_then(|_| {
+    let result = start_ordinary_window(&cli, model, &codex_home).and_then(|_| {
         let after = read_limits(&cli, &codex_home)?;
         if after.primary_reset <= Utc::now().timestamp() {
             return Err("Codex completed but a new window was not confirmed".into());
