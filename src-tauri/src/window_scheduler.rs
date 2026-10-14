@@ -126,13 +126,9 @@ fn cli_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "Codex CLI not found (checked Desktop bundled CLI and PATH)".into())
 }
 
-fn ensure_chatgpt_auth() -> Result<(), String> {
+fn ensure_chatgpt_auth(codex_home: &Path) -> Result<(), String> {
     // Do not ever fall through to pay-per-token API key authentication.
-    let home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
-        .ok_or("Codex home not found")?;
-    let bytes = fs::read(home.join("auth.json"))
+    let bytes = fs::read(codex_home.join("auth.json"))
         .map_err(|_| "ChatGPT auth.json unavailable; automatic usage is disabled".to_string())?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid auth.json")?;
     if value.get("auth_mode").and_then(Value::as_str) != Some("chatgpt") {
@@ -322,7 +318,7 @@ fn acquire_lock(app_dir: &Path) -> Result<Option<TickLock>, String> {
     }
 }
 
-fn ping(cli: &Path, model: &str) -> Result<(), String> {
+fn ping(cli: &Path, model: &str, codex_home: &Path) -> Result<(), String> {
     let mut child = Command::new(cli)
         .args([
             "exec",
@@ -340,6 +336,7 @@ fn ping(cli: &Path, model: &str) -> Result<(), String> {
             "Reply with exactly OK. Do not use tools.",
         ])
         .current_dir(std::env::temp_dir())
+        .env("CODEX_HOME", codex_home)
         .env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_API_KEY")
         .stdin(Stdio::null())
@@ -365,7 +362,13 @@ fn ping(cli: &Path, model: &str) -> Result<(), String> {
     }
 }
 
-pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> SchedulerReport {
+pub fn tick(
+    enabled: bool,
+    model: &str,
+    app_dir: &Path,
+    codex_home: &Path,
+    dry_run: bool,
+) -> SchedulerReport {
     if !enabled && !dry_run {
         return SchedulerReport::new("disabled", "Scheduler is off; monitoring remains passive");
     }
@@ -376,12 +379,7 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     if !dry_run && recent_attempt(app_dir, now.timestamp()) {
         return SchedulerReport::new("backoff", "An attempt occurred in the last 30 minutes");
     }
-    if !model
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
-        || model.is_empty()
-        || model.len() > 80
-    {
+    if model.trim().is_empty() || model.chars().any(char::is_control) {
         return SchedulerReport::new("error", "Invalid model name");
     }
     if !on_ac_power() {
@@ -390,7 +388,7 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
             "Automatic starts are disabled on battery power",
         );
     }
-    if let Err(error) = ensure_chatgpt_auth() {
+    if let Err(error) = ensure_chatgpt_auth(codex_home) {
         return SchedulerReport::new("auth-required", error);
     }
     let cli = match cli_path() {
@@ -405,7 +403,7 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
             Err(error) => return SchedulerReport::new("sleep-guard-failed", error),
         }
     };
-    let limits = match read_limits(&cli) {
+    let limits = match read_limits(&cli, codex_home) {
         Ok(value) => value,
         Err(error) => return SchedulerReport::new("rpc-failed", error),
     };
@@ -458,8 +456,8 @@ pub fn tick(enabled: bool, model: &str, app_dir: &Path, dry_run: bool) -> Schedu
     if let Err(error) = save_attempt(app_dir, "attempt", "pending") {
         return SchedulerReport::new("error", error);
     }
-    let result = ping(&cli, model).and_then(|_| {
-        let after = read_limits(&cli)?;
+    let result = ping(&cli, model, codex_home).and_then(|_| {
+        let after = read_limits(&cli, codex_home)?;
         if after.primary_reset <= Utc::now().timestamp() {
             return Err("Codex completed but a new window was not confirmed".into());
         }
@@ -625,7 +623,7 @@ mod tests {
 
     #[test]
     fn disabled_never_requests() {
-        let report = tick(false, "gpt-5.6-luna", Path::new("/unused"), false);
+        let report = tick(false, "gpt-5.6-luna", Path::new("/unused"), Path::new("/unused"), false);
         assert_eq!(report.action, "disabled");
     }
 
