@@ -17,6 +17,7 @@ pub struct Limits {
     pub primary_used: f64,
     pub weekly_used: f64,
     pub reset_credits_available: u64,
+    pub ordinary_usage_allowed: Option<bool>,
 }
 
 impl Limits {
@@ -25,6 +26,13 @@ impl Limits {
             .get("result")
             .and_then(|v| v.get("rateLimits"))
             .ok_or("Codex did not return rateLimits")?;
+        // The backend explicitly states whether ordinary, included usage is
+        // allowed for this account. Null, absent or false must NEVER be
+        // interpreted as a normal reset by inspecting percentages/timestamps.
+        let ordinary_usage_allowed = value
+            .get("result")
+            .and_then(|result| result.get("ordinaryUsageAllowed"))
+            .and_then(Value::as_bool);
         // Always verify the banked reset-credit state. Without a verified
         // zero count, an automatic ping could redeem a stored reset.
         // This field belongs to result, not to result.rateLimits.
@@ -60,6 +68,7 @@ impl Limits {
             primary_used,
             weekly_used,
             reset_credits_available,
+            ordinary_usage_allowed,
         })
     }
 }
