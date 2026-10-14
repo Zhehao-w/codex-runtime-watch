@@ -103,7 +103,9 @@ fn save_settings(
         if settings.scheduler_enabled || settings.scheduler_wake_enabled {
             return Err("Window Scheduler requires macOS".into());
         }
-        settings.save(&state.settings_path).map_err(|e| e.to_string())?;
+        settings
+            .save(&state.settings_path)
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
