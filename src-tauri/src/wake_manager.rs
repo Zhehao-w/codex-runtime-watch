@@ -101,8 +101,8 @@ fn privileged_owner_guard(marker: &str) -> String {
 pub fn status(app_dir: &Path) -> WakeStatus {
     let marker = marker_path(app_dir).to_string_lossy().into_owned();
     let owner = installed_owner();
-    let installed = matches!(&owner, Ok(Some(current)) if current == &marker)
-        && Path::new(ROOT_BIN).is_file();
+    let installed =
+        matches!(&owner, Ok(Some(current)) if current == &marker) && Path::new(ROOT_BIN).is_file();
     let (owned_events, detail) = match owner {
         Err(error) => (0, error),
         Ok(Some(other)) if other != marker => (
@@ -111,7 +111,9 @@ pub fn status(app_dir: &Path) -> WakeStatus {
                 .into(),
         ),
         Ok(_) => {
-            let output = Command::new("/usr/bin/pmset").args(["-g", "sched"]).output();
+            let output = Command::new("/usr/bin/pmset")
+                .args(["-g", "sched"])
+                .output();
             match output {
                 Ok(output) if output.status.success() => {
                     let text = String::from_utf8_lossy(&output.stdout);
@@ -290,7 +292,8 @@ mod tests {
     #[test]
     fn rejects_foreign_system_wake_service() {
         let alice = "/Users/alice/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
-        let bob = "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let bob =
+            "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
         let guard = privileged_owner_guard(alice);
         assert!(guard.contains("PlistBuddy"));
         assert!(guard.contains(&shell_quote(alice)));
