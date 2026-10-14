@@ -44,6 +44,14 @@ fn attach_limits(limits: &Limits, report: &mut SchedulerReport) {
     report.weekly_used_percent = Some(limits.weekly_used);
 }
 
+/// Never redeem saved reset credits. Only explicit backend permission to
+/// use the ordinary included quota AND a zero saved-credit balance passes.
+fn ordinary_usage_safe(limits: &Limits) -> bool {
+    limits.ordinary_usage_allowed == Some(true)
+        && limits.reset_credits_available == 0
+        && limits.weekly_used < 95.0
+}
+
 /// A Mac on battery should never initiate an automatic model request.
 fn on_ac_power() -> bool {
     Command::new("/usr/bin/pmset")
@@ -323,10 +331,7 @@ pub fn tick(
     if !dry_run {
         if let Err(error) = publish_next_reset(
             app_dir,
-            if limits.weekly_used >= 95.0
-                || limits.reset_credits_available > 0
-                || limits.ordinary_usage_allowed != Some(true)
-            {
+            if !ordinary_usage_safe(&limits) {
                 0
             } else {
                 limits.primary_reset
@@ -391,9 +396,7 @@ pub fn tick(
         }
     };
     let fresh_now = Local::now();
-    if fresh.reset_credits_available > 0
-        || fresh.ordinary_usage_allowed != Some(true)
-        || fresh.weekly_used >= 95.0
+    if !ordinary_usage_safe(&fresh)
         || fresh.primary_reset > fresh_now.timestamp()
         || !allowed_time(fresh_now, fresh.primary_reset)
     {
@@ -420,10 +423,7 @@ pub fn tick(
             if let Err(error) =
                 publish_next_reset(
                     app_dir,
-                    if after.reset_credits_available == 0
-                        && after.ordinary_usage_allowed == Some(true)
-                        && after.weekly_used < 95.0
-                    {
+                    if ordinary_usage_safe(&after) {
                         after.primary_reset
                     } else {
                         0
@@ -657,6 +657,34 @@ mod tests {
             .single()
             .unwrap();
         assert!(allowed_time(reset, reset.timestamp()));
+    }
+
+    #[test]
+    fn banked_resets_are_never_eligible_for_an_automatic_request() {
+        let base = Limits {
+            primary_reset: 1,
+            primary_used: 100.0,
+            weekly_used: 5.0,
+            reset_credits_available: 0,
+            ordinary_usage_allowed: Some(true),
+        };
+        assert!(ordinary_usage_safe(&base));
+        assert!(!ordinary_usage_safe(&Limits {
+            reset_credits_available: 1,
+            ..base
+        }));
+        assert!(!ordinary_usage_safe(&Limits {
+            ordinary_usage_allowed: Some(false),
+            ..base
+        }));
+        assert!(!ordinary_usage_safe(&Limits {
+            ordinary_usage_allowed: None,
+            ..base
+        }));
+        assert!(!ordinary_usage_safe(&Limits {
+            weekly_used: 95.0,
+            ..base
+        }));
     }
 
     #[test]
