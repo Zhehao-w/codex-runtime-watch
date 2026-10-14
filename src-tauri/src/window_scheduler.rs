@@ -426,24 +426,67 @@ fn xml_escape(input: &str) -> String {
 
 /// Manage only our own unprivileged per-user LaunchAgent. This does NOT
 /// schedule macOS wake events or change power-management settings.
+fn launchctl_loaded(service: &str) -> bool {
+    Command::new("/bin/launchctl")
+        .args(["print", service])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn launchctl_bootstrap(domain: &str, plist: &Path) -> Result<(), String> {
+    let output = Command::new("/bin/launchctl")
+        .arg("bootstrap")
+        .arg(domain)
+        .arg(plist)
+        .output()
+        .map_err(|e| format!("Cannot launch scheduler LaunchAgent: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "launchctl bootstrap failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+/// Stage and validate updates before stopping the previous agent.
+/// Restores the old plist and running service on replacement failure.
 pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
     let plist = agent_plist_path()?;
     let domain = format!("gui/{}", launchctl_uid()?);
     let service = format!("{domain}/{AGENT_LABEL}");
-    let _ = Command::new("/bin/launchctl")
-        .args(["bootout", &service])
-        .output();
-
+    let old_content = match fs::read(&plist) {
+        Ok(content) => Some(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Cannot inspect scheduler LaunchAgent: {e}")),
+    };
+    let loaded = launchctl_loaded(&service);
     if !enabled {
-        match fs::remove_file(&plist) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("Cannot remove scheduler LaunchAgent: {e}")),
-        };
+        if loaded {
+            let output = Command::new("/bin/launchctl")
+                .args(["bootout", &service])
+                .output()
+                .map_err(|e| format!("Cannot unload scheduler LaunchAgent: {e}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Cannot unload scheduler LaunchAgent: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+        if let Err(e) = fs::remove_file(&plist) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                if loaded {
+                    let _ = launchctl_bootstrap(&domain, &plist);
+                }
+                return Err(format!("Cannot remove scheduler LaunchAgent: {e}"));
+            }
+        }
         return Ok(());
     }
+
     let exe = std::env::current_exe().map_err(|e| format!("Cannot locate app executable: {e}"))?;
-    let exe = exe.to_string_lossy();
     let content = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -455,23 +498,61 @@ pub fn sync_launch_agent(enabled: bool) -> Result<(), String> {
 <key>StandardOutPath</key><string>/dev/null</string>
 <key>StandardErrorPath</key><string>/dev/null</string>
 </dict></plist>"#,
-        xml_escape(&exe)
+        xml_escape(&exe.to_string_lossy())
     );
+    if old_content.as_deref() == Some(content.as_bytes()) {
+        return if loaded { Ok(()) } else { launchctl_bootstrap(&domain, &plist) };
+    }
     if let Some(parent) = plist.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let temp = plist.with_extension("tmp");
-    fs::write(&temp, content)
-        .and_then(|_| fs::rename(temp, &plist))
-        .map_err(|e| format!("Cannot install scheduler LaunchAgent: {e}"))?;
-    let result = Command::new("/bin/launchctl")
-        .args(["bootstrap", &domain, plist.to_string_lossy().as_ref()])
+    fs::write(&temp, content).map_err(|e| format!("Cannot stage scheduler LaunchAgent: {e}"))?;
+    let validated = Command::new("/usr/bin/plutil")
+        .arg("-lint")
+        .arg(&temp)
         .output()
-        .map_err(|e| format!("Cannot start scheduler LaunchAgent: {e}"))?;
-    if !result.status.success() {
+        .map_err(|e| format!("Cannot validate scheduler LaunchAgent: {e}"))?;
+    if !validated.status.success() {
+        let _ = fs::remove_file(&temp);
         return Err(format!(
-            "launchctl bootstrap failed: {}",
-            String::from_utf8_lossy(&result.stderr)
+            "Invalid scheduler LaunchAgent: {}",
+            String::from_utf8_lossy(&validated.stderr)
+        ));
+    }
+    if loaded {
+        let output = Command::new("/bin/launchctl")
+            .args(["bootout", &service])
+            .output()
+            .map_err(|e| format!("Cannot unload scheduler LaunchAgent: {e}"))?;
+        if !output.status.success() {
+            let _ = fs::remove_file(&temp);
+            return Err(format!("Cannot unload scheduler LaunchAgent: {}",
+                String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    if let Err(e) = fs::rename(&temp, &plist) {
+        if loaded {
+            let _ = launchctl_bootstrap(&domain, &plist);
+        }
+        return Err(format!("Cannot activate staged scheduler LaunchAgent: {e}"));
+    }
+    if let Err(start_error) = launchctl_bootstrap(&domain, &plist) {
+        let restored = if let Some(previous) = old_content {
+            fs::write(&temp, previous)
+                .and_then(|_| fs::rename(&temp, &plist))
+                .map_err(|e| format!("Cannot restore previous LaunchAgent: {e}"))
+        } else {
+            fs::remove_file(&plist)
+                .map_err(|e| format!("Cannot remove failed LaunchAgent: {e}"))
+        };
+        let restart = if loaded && restored.is_ok() {
+            launchctl_bootstrap(&domain, &plist)
+        } else {
+            Ok(())
+        };
+        return Err(format!(
+            "{start_error}; restore: {restored:?}; previous agent restart: {restart:?}"
         ));
     }
     Ok(())
