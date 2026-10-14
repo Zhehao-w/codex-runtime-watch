@@ -142,7 +142,8 @@ mod tests {
         assert!(Limits::parse(&json!({"result":{"rateLimits":{
             "primary":{"resetsAt":123,"usedPercent":0},
             "secondary":{"usedPercent":50}
-        }}})).is_err());
+        }}}))
+        .is_err());
         assert!(Limits::parse(&json!({"result":{
             "rateLimits":{"primary":{"resetsAt":123,"usedPercent":0},"secondary":{"usedPercent":101}},
             "rateLimitResetCredits":{"availableCount":0}
@@ -156,8 +157,13 @@ mod tests {
             "rateLimitResetCredits":{"availableCount":2}
         }});
         assert_eq!(Limits::parse(&data).unwrap().reset_credits_available, 2);
-        for invalid in [Value::Null, json!({}), json!({"availableCount":null}),
-                        json!({"availableCount":-1}), json!({"availableCount":"0"})] {
+        for invalid in [
+            Value::Null,
+            json!({}),
+            json!({"availableCount":null}),
+            json!({"availableCount":-1}),
+            json!({"availableCount":"0"}),
+        ] {
             let mut value = data.clone();
             value["result"]["rateLimitResetCredits"] = invalid;
             assert!(Limits::parse(&value).is_err());
