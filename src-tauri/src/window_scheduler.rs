@@ -167,7 +167,8 @@ fn allowed_time(now: DateTime<Local>, reset: i64) -> bool {
         .any(|anchor| minute >= anchor && minute <= anchor + 30);
     // Allow retry after a 30-minute backoff, but only within one hour of the
     // actual reset and never outside the daily 07:00–22:30 quiet-hours guard.
-    let just_reset = reset > 0 && now.timestamp() >= reset && now.timestamp() - reset <= RESET_RETRY_SECONDS;
+    let just_reset =
+        reset > 0 && now.timestamp() >= reset && now.timestamp() - reset <= RESET_RETRY_SECONDS;
     in_anchor || just_reset
 }
 
@@ -647,9 +648,18 @@ mod tests {
             .single()
             .unwrap();
         assert!(RESET_RETRY_SECONDS > BACKOFF_SECONDS);
-        assert!(allowed_time(reset + chrono::Duration::minutes(31), reset.timestamp()));
-        assert!(allowed_time(reset + chrono::Duration::minutes(59), reset.timestamp()));
-        assert!(!allowed_time(reset + chrono::Duration::minutes(61), reset.timestamp()));
+        assert!(allowed_time(
+            reset + chrono::Duration::minutes(31),
+            reset.timestamp()
+        ));
+        assert!(allowed_time(
+            reset + chrono::Duration::minutes(59),
+            reset.timestamp()
+        ));
+        assert!(!allowed_time(
+            reset + chrono::Duration::minutes(61),
+            reset.timestamp()
+        ));
         let night = Local
             .with_ymd_and_hms(2026, 10, 13, 22, 31, 0)
             .single()
