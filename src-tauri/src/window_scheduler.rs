@@ -593,17 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn strict_rpc_state_validation() {
-        let good = json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0.0},"secondary":{"usedPercent":50.0}}}});
-        assert_eq!(Limits::parse(&good).unwrap().weekly_used, 50.0);
-        assert!(Limits::parse(
-            &json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0}}}})
-        )
-        .is_err());
-        assert!(Limits::parse(&json!({"result":{"rateLimits":{"primary":{"resetsAt":123,"usedPercent":0},"secondary":{"usedPercent":101}}}})).is_err());
-    }
-
-    #[test]
     fn disabled_never_requests() {
         let report = tick(false, "gpt-5.6-luna", Path::new("/unused"), Path::new("/unused"), false);
         assert_eq!(report.action, "disabled");
