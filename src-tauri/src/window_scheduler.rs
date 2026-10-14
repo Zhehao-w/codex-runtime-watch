@@ -1,19 +1,18 @@
 //! Opt-in macOS 5-hour window scheduler. No model calls happen while disabled.
 //! Uses the bundled Codex CLI: rate-limit reads do not consume model tokens.
+use crate::codex::rate_limits::{read_limits, Limits};
 use chrono::{DateTime, Local, Timelike, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
-const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const PING_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKOFF_SECONDS: i64 = 30 * 60;
 const AGENT_LABEL: &str = "dev.codexruntimewatch.window-scheduler";
@@ -39,52 +38,10 @@ impl SchedulerReport {
     }
 }
 
-#[derive(Debug)]
-struct Limits {
-    primary_reset: i64,
-    primary_used: f64,
-    weekly_used: f64,
-}
-
-impl Limits {
-    fn parse(value: &Value) -> Result<Self, String> {
-        let limits = value
-            .get("result")
-            .and_then(|v| v.get("rateLimits"))
-            .ok_or("Codex did not return rateLimits")?;
-        let primary = limits.get("primary").ok_or("Missing primary window")?;
-        let secondary = limits.get("secondary").ok_or("Missing weekly window")?;
-        let primary_reset = primary
-            .get("resetsAt")
-            .and_then(Value::as_i64)
-            .ok_or("Missing primary reset timestamp")?;
-        let primary_used = primary
-            .get("usedPercent")
-            .and_then(Value::as_f64)
-            .ok_or("Missing primary usage")?;
-        let weekly_used = secondary
-            .get("usedPercent")
-            .and_then(Value::as_f64)
-            .ok_or("Missing weekly usage")?;
-        if !primary_used.is_finite()
-            || !weekly_used.is_finite()
-            || !(0.0..=100.0).contains(&primary_used)
-            || !(0.0..=100.0).contains(&weekly_used)
-        {
-            return Err("Invalid usage percentages".into());
-        }
-        Ok(Self {
-            primary_reset,
-            primary_used,
-            weekly_used,
-        })
-    }
-
-    fn attach(&self, report: &mut SchedulerReport) {
-        report.next_reset = Some(self.primary_reset);
-        report.primary_used_percent = Some(self.primary_used);
-        report.weekly_used_percent = Some(self.weekly_used);
-    }
+fn attach_limits(limits: &Limits, report: &mut SchedulerReport) {
+    report.next_reset = Some(limits.primary_reset);
+    report.primary_used_percent = Some(limits.primary_used);
+    report.weekly_used_percent = Some(limits.weekly_used);
 }
 
 /// A Mac on battery should never initiate an automatic model request.
@@ -190,62 +147,6 @@ fn publish_next_reset(app_dir: &Path, reset: i64, now: i64) -> Result<(), String
     fs::write(&temp, format!("{reset}\n"))
         .and_then(|_| fs::rename(temp, path))
         .map_err(|e| format!("Cannot publish next-reset wake: {e}"))
-}
-
-fn read_limits(cli: &Path) -> Result<Limits, String> {
-    let mut child = Command::new(cli)
-        .arg("app-server")
-        .env_remove("OPENAI_API_KEY")
-        .env_remove("CODEX_API_KEY")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Unable to launch app-server: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("Missing app-server stdin")?;
-    let stdout = child.stdout.take().ok_or("Missing app-server stdout")?;
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if line.len() > 256 * 1024 {
-                        break;
-                    }
-                    if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                        if value.get("id").and_then(Value::as_i64) == Some(2) {
-                            let _ = tx.send(value);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    });
-    let request = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-runtime-watch\",\"title\":\"Codex Runtime Watch\",\"version\":\"0.1.1\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{\"excludeResetCreditDetails\":true}}\n"
-    );
-    if let Err(e) = stdin
-        .write_all(request.as_bytes())
-        .and_then(|_| stdin.flush())
-    {
-        stop_child(&mut child);
-        return Err(format!("app-server request failed: {e}"));
-    }
-    // Keep stdin open until the asynchronous id=2 response arrives.
-    let response = rx.recv_timeout(RPC_TIMEOUT);
-    drop(stdin);
-    stop_child(&mut child);
-    let value = response.map_err(|_| "Timed out reading Codex rate limits")?;
-    if let Some(error) = value.get("error") {
-        return Err(format!("Codex rate-limit RPC error: {error}"));
-    }
-    Limits::parse(&value)
 }
 
 fn allowed_time(now: DateTime<Local>, reset: i64) -> bool {
@@ -440,7 +341,7 @@ pub fn tick(
     } else {
         SchedulerReport::new("pending", "Ready for minimal Codex request")
     };
-    limits.attach(&mut report);
+    attach_limits(&limits, &mut report);
     if report.action != "pending" {
         return report;
     }
@@ -474,12 +375,12 @@ pub fn tick(
                     "Window started; dynamic wake update failed",
                 );
                 let mut report = SchedulerReport::new("started-wake-warning", error);
-                after.attach(&mut report);
+                attach_limits(&after, &mut report);
                 return report;
             }
             let _ = save_attempt(app_dir, "started", "New 5-hour window confirmed");
             let mut report = SchedulerReport::new("started", "New 5-hour window confirmed");
-            after.attach(&mut report);
+            attach_limits(&after, &mut report);
             report
         }
         Err(error) => {
