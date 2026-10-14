@@ -77,17 +77,22 @@ five-hour window has actually expired. Weekly usage >=95%, missing account/rate-
 information, API-key authentication, and battery operation all cause safe skips. The
 optional **Dry Run** never sends a model request or redeems a banked reset.
 
-**Hard safety rule: saved Reset Credits are never spent.** The scheduler never invokes
-`account/rateLimitResetCredit/consume` or another redemption operation. Before
-each ordinary model request, the app-server MUST confirm `ordinaryUsageAllowed: true`
-and `rateLimitResetCredits.availableCount: 0`, including a **fresh second read
-immediately before the request**. If either field is missing, null, false/positive,
-invalid, or the usage read fails, the scheduler **skips the request**. It also skips
-when credits exist even if ordinary usage would otherwise be permitted, prioritizing
-the user's earned reset credits over 5-hour scheduling. No 5h reset timestamp or
-usage percentage can override this policy. This relies on the Codex server's
-documented distinction between ordinary included usage and the explicit credit
-redemption operation; if the backend changes, this feature must fail closed.
+**Hard safety rule: NEVER redeem any Banked Reset Credit.** Auto-start means one
+small ordinary Codex request after the normal five-hour window resets; it does not
+reset/extend a depleted window with a saved credit. The scheduler **never** invokes
+`account/rateLimitResetCredit/consume` (or any redemption operation), never enables
+the Luna Reserve fallback, and never switches to API-key billing.
+
+**Having Banked Reset Credits does not block normal scheduling.** Your stored
+balance can be zero, two, ten, or unknown. Before any model request, the app-server
+must explicitly confirm `ordinaryUsageAllowed: true`, including a **second
+read-only check immediately before the request**; the normal weekly threshold
+must also remain below 95%. If permission is false/null/unavailable, the service
+changes its contract, or the usage check fails, **skip the request**. Never infer
+ordinary permission from `resetsAt` or percentages alone. This is a client-side
+safety policy based on the official backend distinction between normal included
+usage and separate Reset Credit redemption. A future undocumented change to the
+Codex CLI/server would require revalidation; CI does not guarantee server behavior.
 
 In **Settings → 5-hour Window Scheduler**, enable automatic window starts. The
 scheduler prefers 07:00, then actual ~12:00 / 17:00 / 22:00 reset times, and never
