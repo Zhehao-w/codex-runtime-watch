@@ -44,12 +44,10 @@ fn attach_limits(limits: &Limits, report: &mut SchedulerReport) {
     report.weekly_used_percent = Some(limits.weekly_used);
 }
 
-/// Never redeem saved reset credits. Only explicit backend permission to
-/// use the ordinary included quota AND a zero saved-credit balance passes.
+/// The Banked Reset balance is independent of normal included usage.
+/// Only explicit backend permission authorizes the ordinary five-hour window.
 fn ordinary_usage_safe(limits: &Limits) -> bool {
-    limits.ordinary_usage_allowed == Some(true)
-        && limits.reset_credits_available == 0
-        && limits.weekly_used < 95.0
+    limits.ordinary_usage_allowed == Some(true) && limits.weekly_used < 95.0
 }
 
 /// A Mac on battery should never initiate an automatic model request.
@@ -341,15 +339,10 @@ pub fn tick(
             return SchedulerReport::new("wake-update-failed", error);
         }
     }
-    let mut report = if limits.reset_credits_available > 0 {
-        SchedulerReport::new(
-            "reset-credits-guard",
-            "Banked usage reset credits are available; automatic requests are disabled",
-        )
-    } else if limits.ordinary_usage_allowed != Some(true) {
+    let mut report = if limits.ordinary_usage_allowed != Some(true) {
         SchedulerReport::new(
             "ordinary-usage-guard",
-            "Codex did not explicitly authorize ordinary included usage; reset credits must never be spent",
+            "Backend did not explicitly authorize ordinary included usage; no model request made",
         )
     } else if limits.weekly_used >= 95.0 {
         SchedulerReport::new(
@@ -384,7 +377,7 @@ pub fn tick(
         return SchedulerReport::new("backoff", "A recent tick has already attempted a request");
     }
     // A fresh, read-only server snapshot immediately before any model call:
-    // ordinaryUsageAllowed MUST be true and reset credits MUST be zero.
+    // ordinaryUsageAllowed MUST be true. Banked reset count is irrelevant.
     // Never infer ordinary usage permission from primary.resetsAt alone.
     let fresh = match read_limits(&cli, &codex_home) {
         Ok(value) => value,
@@ -402,7 +395,7 @@ pub fn tick(
     {
         let mut report = SchedulerReport::new(
             "safety-recheck-skip",
-            "Fresh account state does not permit ordinary usage without reset credits; no model request made",
+            "Fresh account state does not permit ordinary included usage; no model request made",
         );
         attach_limits(&fresh, &mut report);
         return report;
@@ -658,30 +651,25 @@ mod tests {
     }
 
     #[test]
-    fn banked_resets_are_never_eligible_for_an_automatic_request() {
-        let base = Limits {
+    fn ordinary_window_eligibility_depends_only_on_backend_permission() {
+        let ordinary = Limits {
             primary_reset: 1,
             primary_used: 100.0,
             weekly_used: 5.0,
-            reset_credits_available: 0,
             ordinary_usage_allowed: Some(true),
         };
-        assert!(ordinary_usage_safe(&base));
-        assert!(!ordinary_usage_safe(&Limits {
-            reset_credits_available: 1,
-            ..base
-        }));
+        assert!(ordinary_usage_safe(&ordinary));
         assert!(!ordinary_usage_safe(&Limits {
             ordinary_usage_allowed: Some(false),
-            ..base
+            ..ordinary
         }));
         assert!(!ordinary_usage_safe(&Limits {
             ordinary_usage_allowed: None,
-            ..base
+            ..ordinary
         }));
         assert!(!ordinary_usage_safe(&Limits {
             weekly_used: 95.0,
-            ..base
+            ..ordinary
         }));
     }
 
