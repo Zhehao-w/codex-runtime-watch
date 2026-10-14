@@ -42,24 +42,98 @@ pub fn set_marker(app_dir: &Path, enabled: bool) -> Result<(), String> {
     }
 }
 
-pub fn status(app_dir: &Path) -> WakeStatus {
-    let installed = Path::new(ROOT_BIN).is_file() && Path::new(ROOT_PLIST).is_file();
-    let output = Command::new("/usr/bin/pmset")
-        .args(["-g", "sched"])
-        .output();
-    let (owned_events, detail) = match output {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            (text.lines().filter(|line| line.contains(WAKE_OWNER) && line.contains("wake at")).count(),
-             if installed { "Wake helper installed; 06:58 / 11:58 / 16:58 / 21:58 fallback wakes plus a validated server-reset wake" }
-             else { "Wake helper is not installed; scheduled Codex checks cannot wake a sleeping Mac" }.to_owned())
+/// The privileged service is system-wide. Do not overwrite it if another
+/// macOS user installed it; all existing schedules then belong to that user.
+fn installed_owner() -> Result<Option<String>, String> {
+    let service_file = Path::new(ROOT_PLIST);
+    if !service_file.exists() {
+        if Path::new(ROOT_BIN).exists() {
+            return Err("Orphaned system Wake Manager helper; refusing to overwrite".into());
         }
-        _ => (0, "Unable to read macOS wake schedule".into()),
+        return Ok(None);
+    }
+    let output = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :ProgramArguments:3", ROOT_PLIST])
+        .output()
+        .map_err(|e| format!("Unable to inspect installed Wake Manager owner: {e}"))?;
+    if !output.status.success() {
+        return Err("Installed Wake Manager owner is unreadable; refusing to overwrite".into());
+    }
+    let owner = String::from_utf8(output.stdout)
+        .map_err(|_| "Invalid installed Wake Manager owner encoding")?
+        .trim()
+        .to_owned();
+    if owner.is_empty() {
+        return Err("Installed Wake Manager has no owner; refusing to overwrite".into());
+    }
+    Ok(Some(owner))
+}
+
+fn ensure_current_user_owns_service(marker: &str) -> Result<(), String> {
+    if let Some(existing) = installed_owner()? {
+        if existing != marker {
+            return Err(
+                "Wake Manager already belongs to another macOS user; installation and removal are blocked"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Confirm ownership again INSIDE the administrator-approved root operation.
+/// This prevents a second macOS user replacing the global service between
+/// the unprivileged preflight and the privileged shell execution.
+fn privileged_owner_guard(marker: &str) -> String {
+    format!(
+        "if test -e {plist}; then \
+         test \"$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:3' {plist})\" = {owner} || exit 42; \
+         elif test -e {binary}; then exit 42; fi; ",
+        plist = shell_quote(ROOT_PLIST),
+        binary = shell_quote(ROOT_BIN),
+        owner = shell_quote(marker)
+    )
+}
+
+pub fn status(app_dir: &Path) -> WakeStatus {
+    let marker = marker_path(app_dir).to_string_lossy().into_owned();
+    let owner = installed_owner();
+    let installed = matches!(&owner, Ok(Some(current)) if current == &marker)
+        && Path::new(ROOT_BIN).is_file();
+    let (owned_events, detail) = match owner {
+        Err(error) => (0, error),
+        Ok(Some(other)) if other != marker => (
+            0,
+            "Wake Manager belongs to another macOS user; it cannot be modified from this account"
+                .into(),
+        ),
+        Ok(_) => {
+            let output = Command::new("/usr/bin/pmset").args(["-g", "sched"]).output();
+            match output {
+                Ok(output) if output.status.success() => {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    let count = if installed {
+                        text.lines()
+                            .filter(|line| line.contains(WAKE_OWNER) && line.contains("wake at"))
+                            .count()
+                    } else {
+                        0
+                    };
+                    let message = if installed {
+                        "Wake helper installed for this user; fixed fallback wakes plus a validated dynamic reset wake"
+                    } else {
+                        "Wake helper is not installed for this user"
+                    };
+                    (count, message.into())
+                }
+                _ => (0, "Unable to read macOS wake schedule".into()),
+            }
+        }
     };
     WakeStatus {
         supported: true,
         installed,
-        enabled: marker_path(app_dir).is_file(),
+        enabled: installed && marker_path(app_dir).is_file(),
         owned_events,
         detail,
     }
@@ -115,11 +189,13 @@ fn plist(marker: &str) -> String {
 /// not mutable scripts or commands supplied by the frontend.
 pub fn install(app_dir: &Path) -> Result<(), String> {
     let marker = validated_marker(app_dir)?;
+    ensure_current_user_owns_service(&marker)?;
     let helper_b64 = STANDARD.encode(HELPER_CONTENT);
     let plist_b64 = STANDARD.encode(plist(&marker));
     let service = format!("system/{LABEL}");
+    let guard = privileged_owner_guard(&marker);
     let command = format!(
-        "set -e; /bin/mkdir -p /Library/PrivilegedHelperTools /Library/LaunchDaemons; \
+        "set -e; {guard}/bin/mkdir -p /Library/PrivilegedHelperTools /Library/LaunchDaemons; \
          /bin/launchctl bootout {} >/dev/null 2>&1 || true; \
          /usr/bin/printf %s {} | /usr/bin/base64 -D > {}; \
          /usr/sbin/chown root:wheel {}; /bin/chmod 0755 {}; \
@@ -143,8 +219,10 @@ pub fn install(app_dir: &Path) -> Result<(), String> {
 /// Removes only our daemon and events; other pmset schedules remain intact.
 pub fn uninstall(app_dir: &Path) -> Result<(), String> {
     let marker = validated_marker(app_dir)?;
+    ensure_current_user_owns_service(&marker)?;
+    let guard = privileged_owner_guard(&marker);
     let command = format!(
-        "/bin/launchctl bootout {} >/dev/null 2>&1 || true; \
+        "set -e; {guard}/bin/launchctl bootout {} >/dev/null 2>&1 || true; \
          if test -f {}; then /bin/sh {} remove {}; fi; \
          /bin/rm -f {} {}",
         shell_quote(&format!("system/{LABEL}")),
@@ -195,6 +273,19 @@ mod tests {
         assert!(!xml.contains("codex-cli"));
         assert!(!xml.contains("OPENAI"));
         assert!(xml.contains(ROOT_BIN));
+    }
+
+    #[test]
+    fn rejects_foreign_system_wake_service() {
+        let alice = "/Users/alice/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let bob = "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let guard = privileged_owner_guard(alice);
+        assert!(guard.contains("PlistBuddy"));
+        assert!(guard.contains(&shell_quote(alice)));
+        assert!(!guard.contains(&shell_quote(bob)));
+        let plist = plist(alice);
+        assert!(plist.contains(alice));
+        assert!(!plist.contains(bob));
     }
 
     #[test]
