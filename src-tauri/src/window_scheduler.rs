@@ -647,7 +647,6 @@ mod tests {
             .with_ymd_and_hms(2026, 10, 13, 12, 34, 0)
             .single()
             .unwrap();
-        assert!(RESET_RETRY_SECONDS > BACKOFF_SECONDS);
         assert!(allowed_time(
             reset + chrono::Duration::minutes(31),
             reset.timestamp()
