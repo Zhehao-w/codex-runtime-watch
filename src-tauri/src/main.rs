@@ -98,20 +98,49 @@ fn save_settings(
     state: tauri::State<State>,
     settings: Settings,
 ) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    codex_runtime_watch::window_scheduler::sync_launch_agent(settings.scheduler_enabled)?;
     #[cfg(not(target_os = "macos"))]
-    if settings.scheduler_enabled {
-        return Err("Window Scheduler requires macOS".into());
+    {
+        if settings.scheduler_enabled || settings.scheduler_wake_enabled {
+            return Err("Window Scheduler requires macOS".into());
+        }
+        settings.save(&state.settings_path).map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
-    codex_runtime_watch::wake_manager::set_marker(
-        &state.app_dir,
-        settings.scheduler_enabled && settings.scheduler_wake_enabled,
-    )?;
-    settings
-        .save(&state.settings_path)
-        .map_err(|e| e.to_string())?;
+    {
+        // Validate and persist all new data into a staging file BEFORE altering
+        // the running LaunchAgent. If any step fails, restore prior scheduling.
+        let previous = Settings::load(&state.settings_path);
+        let staged = state.settings_path.with_extension("pending.json");
+        settings.save(&staged).map_err(|e| e.to_string())?;
+        if let Err(error) =
+            codex_runtime_watch::window_scheduler::sync_launch_agent(settings.scheduler_enabled)
+        {
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
+        }
+        if let Err(error) = codex_runtime_watch::wake_manager::set_marker(
+            &state.app_dir,
+            settings.scheduler_enabled && settings.scheduler_wake_enabled,
+        ) {
+            let _ = codex_runtime_watch::window_scheduler::sync_launch_agent(
+                previous.scheduler_enabled,
+            );
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
+        }
+        if let Err(error) = std::fs::rename(&staged, &state.settings_path) {
+            let _ = codex_runtime_watch::wake_manager::set_marker(
+                &state.app_dir,
+                previous.scheduler_enabled && previous.scheduler_wake_enabled,
+            );
+            let restoration = codex_runtime_watch::window_scheduler::sync_launch_agent(
+                previous.scheduler_enabled,
+            );
+            return Err(format!(
+                "Cannot save settings: {error}; LaunchAgent restoration: {restoration:?}"
+            ));
+        }
+    }
     let autostart = app.autolaunch();
     if settings.start_at_login {
         autostart.enable()
