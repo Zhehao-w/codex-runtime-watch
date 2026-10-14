@@ -178,4 +178,25 @@ mod tests {
             assert!(Limits::parse(&value).is_err());
         }
     }
+    #[test]
+    fn ordinary_usage_permission_must_be_explicit() {
+        let base = json!({"result":{
+            "rateLimits":{
+                "primary":{"resetsAt":123,"usedPercent":0.0},
+                "secondary":{"usedPercent":50.0}
+            },
+            "rateLimitResetCredits":{"availableCount":0}
+        }});
+        let mut value = base.clone();
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
+        value["result"]["ordinaryUsageAllowed"] = json!(null);
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
+        value["result"]["ordinaryUsageAllowed"] = json!(false);
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(false));
+        value["result"]["ordinaryUsageAllowed"] = json!("true");
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
+        value["result"]["ordinaryUsageAllowed"] = json!(true);
+        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(true));
+    }
+
 }
