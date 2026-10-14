@@ -192,11 +192,16 @@ mod tests {
         value["result"]["ordinaryUsageAllowed"] = json!(null);
         assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
         value["result"]["ordinaryUsageAllowed"] = json!(false);
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(false));
+        assert_eq!(
+            Limits::parse(&value).unwrap().ordinary_usage_allowed,
+            Some(false)
+        );
         value["result"]["ordinaryUsageAllowed"] = json!("true");
         assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, None);
         value["result"]["ordinaryUsageAllowed"] = json!(true);
-        assert_eq!(Limits::parse(&value).unwrap().ordinary_usage_allowed, Some(true));
+        assert_eq!(
+            Limits::parse(&value).unwrap().ordinary_usage_allowed,
+            Some(true)
+        );
     }
-
 }
