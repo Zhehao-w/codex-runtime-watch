@@ -323,7 +323,10 @@ pub fn tick(
     if !dry_run {
         if let Err(error) = publish_next_reset(
             app_dir,
-            if limits.weekly_used >= 95.0 || limits.reset_credits_available > 0 {
+            if limits.weekly_used >= 95.0
+                || limits.reset_credits_available > 0
+                || limits.ordinary_usage_allowed != Some(true)
+            {
                 0
             } else {
                 limits.primary_reset
@@ -337,6 +340,11 @@ pub fn tick(
         SchedulerReport::new(
             "reset-credits-guard",
             "Banked usage reset credits are available; automatic requests are disabled",
+        )
+    } else if limits.ordinary_usage_allowed != Some(true) {
+        SchedulerReport::new(
+            "ordinary-usage-guard",
+            "Codex did not explicitly authorize ordinary included usage; reset credits must never be spent",
         )
     } else if limits.weekly_used >= 95.0 {
         SchedulerReport::new(
@@ -370,6 +378,32 @@ pub fn tick(
     if recent_attempt(app_dir, now.timestamp()) {
         return SchedulerReport::new("backoff", "A recent tick has already attempted a request");
     }
+    // A fresh, read-only server snapshot immediately before any model call:
+    // ordinaryUsageAllowed MUST be true and reset credits MUST be zero.
+    // Never infer ordinary usage permission from primary.resetsAt alone.
+    let fresh = match read_limits(&cli, &codex_home) {
+        Ok(value) => value,
+        Err(error) => {
+            return SchedulerReport::new(
+                "safety-recheck-failed",
+                format!("Unable to verify safe ordinary usage immediately before request: {error}"),
+            )
+        }
+    };
+    let fresh_now = Local::now();
+    if fresh.reset_credits_available > 0
+        || fresh.ordinary_usage_allowed != Some(true)
+        || fresh.weekly_used >= 95.0
+        || fresh.primary_reset > fresh_now.timestamp()
+        || !allowed_time(fresh_now, fresh.primary_reset)
+    {
+        let mut report = SchedulerReport::new(
+            "safety-recheck-skip",
+            "Fresh account state does not permit ordinary usage without reset credits; no model request made",
+        );
+        attach_limits(&fresh, &mut report);
+        return report;
+    }
     // Save before sending, preventing crash/restart from causing duplicate pings.
     if let Err(error) = save_attempt(app_dir, "attempt", "pending") {
         return SchedulerReport::new("error", error);
@@ -384,7 +418,18 @@ pub fn tick(
     match result {
         Ok(after) => {
             if let Err(error) =
-                publish_next_reset(app_dir, after.primary_reset, Utc::now().timestamp())
+                publish_next_reset(
+                    app_dir,
+                    if after.reset_credits_available == 0
+                        && after.ordinary_usage_allowed == Some(true)
+                        && after.weekly_used < 95.0
+                    {
+                        after.primary_reset
+                    } else {
+                        0
+                    },
+                    Utc::now().timestamp(),
+                )
             {
                 let _ = save_attempt(
                     app_dir,
