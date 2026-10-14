@@ -69,16 +69,19 @@ fn installed_owner() -> Result<Option<String>, String> {
     Ok(Some(owner))
 }
 
-fn ensure_current_user_owns_service(marker: &str) -> Result<(), String> {
-    if let Some(existing) = installed_owner()? {
-        if existing != marker {
-            return Err(
-                "Wake Manager already belongs to another macOS user; installation and removal are blocked"
-                    .into(),
-            );
-        }
+fn verify_service_owner(existing: Option<&str>, marker: &str) -> Result<(), String> {
+    if existing.is_some_and(|existing| existing != marker) {
+        return Err(
+            "Wake Manager already belongs to another macOS user; installation and removal are blocked"
+                .into(),
+        );
     }
     Ok(())
+}
+
+fn ensure_current_user_owns_service(marker: &str) -> Result<(), String> {
+    let existing = installed_owner()?;
+    verify_service_owner(existing.as_deref(), marker)
 }
 
 /// Confirm ownership again INSIDE the administrator-approved root operation.
@@ -273,6 +276,15 @@ mod tests {
         assert!(!xml.contains("codex-cli"));
         assert!(!xml.contains("OPENAI"));
         assert!(xml.contains(ROOT_BIN));
+    }
+
+    #[test]
+    fn owner_verification_refuses_another_macos_account() {
+        let alice = "/Users/alice/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        let bob = "/Users/bob/Library/Application Support/dev.codexruntimewatch.app/window-wake-enabled";
+        assert!(verify_service_owner(None, alice).is_ok());
+        assert!(verify_service_owner(Some(alice), alice).is_ok());
+        assert!(verify_service_owner(Some(bob), alice).is_err());
     }
 
     #[test]
