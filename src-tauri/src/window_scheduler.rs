@@ -289,7 +289,19 @@ pub fn tick(
             "Automatic starts are disabled on battery power",
         );
     }
-    if let Err(error) = ensure_chatgpt_auth(codex_home) {
+    // Use a single absolute directory for auth validation and every CLI subprocess.
+    // In particular, Codex exec runs in a temporary working directory, so a
+    // user-specified relative CODEX_HOME must not resolve to a different account.
+    let codex_home = match codex_home.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            return SchedulerReport::new(
+                "auth-required",
+                format!("Cannot resolve configured Codex home: {error}"),
+            );
+        }
+    };
+    if let Err(error) = ensure_chatgpt_auth(&codex_home) {
         return SchedulerReport::new("auth-required", error);
     }
     let cli = match cli_path() {
@@ -304,7 +316,7 @@ pub fn tick(
             Err(error) => return SchedulerReport::new("sleep-guard-failed", error),
         }
     };
-    let limits = match read_limits(&cli, codex_home) {
+    let limits = match read_limits(&cli, &codex_home) {
         Ok(value) => value,
         Err(error) => return SchedulerReport::new("rpc-failed", error),
     };
@@ -357,8 +369,8 @@ pub fn tick(
     if let Err(error) = save_attempt(app_dir, "attempt", "pending") {
         return SchedulerReport::new("error", error);
     }
-    let result = ping(&cli, model, codex_home).and_then(|_| {
-        let after = read_limits(&cli, codex_home)?;
+    let result = ping(&cli, model, &codex_home).and_then(|_| {
+        let after = read_limits(&cli, &codex_home)?;
         if after.primary_reset <= Utc::now().timestamp() {
             return Err("Codex completed but a new window was not confirmed".into());
         }
