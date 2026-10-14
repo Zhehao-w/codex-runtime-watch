@@ -11,7 +11,7 @@ use std::{
 };
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub primary_reset: i64,
     pub primary_used: f64,
