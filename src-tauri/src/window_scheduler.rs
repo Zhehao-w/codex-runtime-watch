@@ -323,7 +323,7 @@ pub fn tick(
     if !dry_run {
         if let Err(error) = publish_next_reset(
             app_dir,
-            if limits.weekly_used >= 95.0 {
+            if limits.weekly_used >= 95.0 || limits.reset_credits_available > 0 {
                 0
             } else {
                 limits.primary_reset
@@ -333,7 +333,12 @@ pub fn tick(
             return SchedulerReport::new("wake-update-failed", error);
         }
     }
-    let mut report = if limits.weekly_used >= 95.0 {
+    let mut report = if limits.reset_credits_available > 0 {
+        SchedulerReport::new(
+            "reset-credits-guard",
+            "Banked usage reset credits are available; automatic requests are disabled",
+        )
+    } else if limits.weekly_used >= 95.0 {
         SchedulerReport::new(
             "weekly-guard",
             "Weekly usage reached the 95% safety threshold",
